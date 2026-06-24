@@ -1,0 +1,8 @@
+Package: com.xhbb.tweak
+Name: xhbb
+Version: 0.0.1
+Architecture: iphoneos-arm
+Description: xhbb tweak
+Maintainer: xhbb
+Author: xhbb
+Section: Tweaks

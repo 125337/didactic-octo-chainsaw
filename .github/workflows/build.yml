@@ -1,0 +1,74 @@
+name: Build xhbb Tweak
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: latest-stable
+
+    - name: Install Theos
+      run: |
+        git clone --recursive https://github.com/theos/theos.git $HOME/theos
+        echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+
+    - name: Install ldid
+      run: |
+        git clone https://github.com/theos/ldid.git $HOME/ldid
+        cd $HOME/ldid
+        make -j$(sysctl -n hw.logicalcpu)
+        sudo cp ldid /usr/local/bin/
+
+    - name: Build
+      run: |
+        set -o pipefail
+        make clean || true
+        make package
+
+    - name: Prepare artifact
+      run: |
+        mkdir -p build
+        # 复制 dylib（如果存在）
+        find .theos -name "*.dylib" -exec cp {} build/ \; 2>/dev/null || true
+        # 复制 deb 包
+        cp packages/*.deb build/ 2>/dev/null || true
+        ls -lh build/
+
+    - name: Delete old artifacts
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const artifacts = await github.rest.actions.listArtifactsForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+          });
+          for (const artifact of artifacts.data.artifacts) {
+            if (artifact.name === 'xhbb-output') {
+              await github.rest.actions.deleteArtifact({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                artifact_id: artifact.id,
+              });
+            }
+          }
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: xhbb-output
+        path: build/
+        retention-days: 30

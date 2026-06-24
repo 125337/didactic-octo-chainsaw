@@ -28,10 +28,7 @@ jobs:
 
     - name: Install ldid
       run: |
-        git clone https://github.com/theos/ldid.git $HOME/ldid
-        cd $HOME/ldid
-        make -j$(sysctl -n hw.logicalcpu)
-        sudo cp ldid /usr/local/bin/
+        brew install ldid
 
     - name: Build
       run: |

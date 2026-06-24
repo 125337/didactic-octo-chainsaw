@@ -1,3 +1,5 @@
-%ctor {
-    // xhbb tweak - placeholder, 待后续添加功能
+%hook SpringBoard
+- (void)applicationDidFinishLaunching:(id)application {
+    %orig;
 }
+%end

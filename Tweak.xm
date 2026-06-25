@@ -4,6 +4,7 @@
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
 
 static NSString *GH_ID = @"gh_043507dcdc38";
 static NSString *_logPath;
@@ -232,11 +233,11 @@ void LogSync(NSString *format, ...) {
         // ---- Step 2c: 尝试获取 BrandService 和 MuteBrandMgr ----
         id brandService = [serviceCenter performSelector:@selector(getService:)
                                               withObject:NSClassFromString(@"BrandService")];
-        LogSync(@"[Step2c] BrandService = %@", brandService ? [brandService class] : @"❌ nil");
+        LogSync(@"[Step2c] BrandService = %@", brandService ? NSStringFromClass([brandService class]) : @"❌ nil");
 
         id muteBrandMgr = [serviceCenter performSelector:@selector(getService:)
                                               withObject:NSClassFromString(@"MuteBrandMgr")];
-        LogSync(@"[Step2c] MuteBrandMgr = %@", muteBrandMgr ? [muteBrandMgr class] : @"❌ nil");
+        LogSync(@"[Step2c] MuteBrandMgr = %@", muteBrandMgr ? NSStringFromClass([muteBrandMgr class]) : @"❌ nil");
 
         // ---- Step 3: 先尝试本地获取联系人 ----
         id contact = nil;

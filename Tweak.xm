@@ -241,12 +241,6 @@ __attribute__((constructor)) static void xhbb_init() {
     
     Log(@"viewDidAppear 被调用");
     
-    BOOL shown = [[NSUserDefaults standardUserDefaults] boolForKey:@"xhbb_follow_shown"];
-    if (shown) {
-        Log(@"弹窗已显示过，跳过");
-        return;
-    }
-    
     if ([XHBBHelper isFollowed]) {
         Log(@"已关注，标记跳过");
         [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"xhbb_follow_shown"];

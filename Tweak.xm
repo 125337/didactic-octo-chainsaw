@@ -29,7 +29,7 @@ void Log(NSString *format, ...) {
 }
 
 
-#pragma mark - ===== Helper 类（避免使用 %new） =====
+#pragma mark - ===== Helper 类（避免使用 Logos new 语法） =====
 
 @interface XHBBHelper : NSObject
 @end

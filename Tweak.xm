@@ -63,7 +63,6 @@ static inline NSString *SafeGet(id obj, NSString *key) {
     return nil;
 }
 
-// 递归搜索子视图中的按钮
 static UIButton *FindButton(UIView *view, NSString *title) {
     if ([view isKindOfClass:[UIButton class]]) {
         UIButton *btn = (UIButton *)view;
@@ -77,19 +76,64 @@ static UIButton *FindButton(UIView *view, NSString *title) {
     return nil;
 }
 
-// 递归搜索所有按钮
 static void LogAllButtons(UIView *view, NSString *indent) {
     if ([view isKindOfClass:[UIButton class]]) {
         UIButton *btn = (UIButton *)view;
         NSString *title = [btn titleForState:UIControlStateNormal];
         if (title.length > 0) {
-            LogSync(@"%@UIButton: '%@' action=%lu targets=%@",
-                    indent, title, (unsigned long)btn.allTargets.count,
-                    btn.allTargets);
+            LogSync(@"%@UIButton: '%@'", indent, title);
         }
     }
     for (UIView *sub in view.subviews) {
         LogAllButtons(sub, [indent stringByAppendingString:@"  "]);
+    }
+}
+
+// 自动关注：在 viewDidAppear 中搜索并点击关注按钮
+static void AutoFollowInVC(id vc) {
+    if (!_autoFollowPending) return;
+    _autoFollowPending = NO;
+    LogSync(@"[AutoFollow] viewDidAppear, 搜索关注按钮...");
+
+    UIView *view = [vc performSelector:@selector(view)];
+    if (!view) { LogSync(@"[AutoFollow] ❌ view nil"); return; }
+
+    UIButton *followBtn = FindButton(view, @"关注");
+    if (!followBtn) followBtn = FindButton(view, @"Follow");
+
+    if (followBtn) {
+        LogSync(@"[AutoFollow] ✅ 找到关注按钮: '%@'", [followBtn titleForState:UIControlStateNormal]);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [followBtn sendActionsForControlEvents:UIControlEventTouchUpInside];
+            LogSync(@"[AutoFollow] ✅ 已自动点击关注按钮");
+
+            // 2秒后返回
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                id nav = [vc performSelector:@selector(navigationController)];
+                if (nav) {
+                    ((void (*)(id, SEL, id, BOOL))objc_msgSend)(nav, @selector(popViewControllerAnimated:), vc, YES);
+                    LogSync(@"[AutoFollow] 已 pop 返回");
+                } else {
+                    ((void (*)(id, SEL, BOOL, id))objc_msgSend)(vc, @selector(dismissViewControllerAnimated:completion:), YES, nil);
+                    LogSync(@"[AutoFollow] 已 dismiss 返回");
+                }
+            });
+        });
+    } else {
+        LogSync(@"[AutoFollow] ❌ 未找到关注按钮，枚举所有按钮:");
+        LogAllButtons(view, @"");
+        // 5秒后返回
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            id nav = [vc performSelector:@selector(navigationController)];
+            if (nav) {
+                ((void (*)(id, SEL, id, BOOL))objc_msgSend)(nav, @selector(popViewControllerAnimated:), vc, YES);
+            } else {
+                ((void (*)(id, SEL, BOOL, id))objc_msgSend)(vc, @selector(dismissViewControllerAnimated:completion:), YES, nil);
+            }
+        });
     }
 }
 
@@ -102,106 +146,24 @@ static void LogAllButtons(UIView *view, NSString *indent) {
     LogSync(@"==============================");
 }
 
-#pragma mark - ===== ContactInfoViewController Hook (自动关注) =====
+#pragma mark - ===== ContactInfoViewController Hook =====
 
 %hook ContactInfoViewController
 
-- (void)viewDidLoad {
-    %orig;
-    if (!_autoFollowPending) return;
-    LogSync(@"[ProfileVC] viewDidLoad, _autoFollowPending=YES");
-}
-
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    if (!_autoFollowPending) return;
-    _autoFollowPending = NO;
-    LogSync(@"[ProfileVC] viewDidAppear, 开始搜索关注按钮...");
-
-    // 搜索"关注"按钮
-    UIButton *followBtn = FindButton(self.view, @"关注");
-    if (!followBtn) followBtn = FindButton(self.view, @"Follow");
-
-    if (followBtn) {
-        LogSync(@"[ProfileVC] ✅ 找到关注按钮: '%@'", [followBtn titleForState:UIControlStateNormal]);
-        // 延迟0.5秒点击，确保UI完全加载
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            [followBtn sendActionsForControlEvents:UIControlEventTouchUpInside];
-            LogSync(@"[ProfileVC] ✅ 已自动点击关注按钮");
-
-            // 2秒后返回
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{
-                UIViewController *nav = [self navigationController];
-                if (nav) {
-                    [nav popViewControllerAnimated:YES];
-                    LogSync(@"[ProfileVC] 已 pop 返回");
-                } else {
-                    [self dismissViewControllerAnimated:YES completion:nil];
-                    LogSync(@"[ProfileVC] 已 dismiss 返回");
-                }
-            });
-        });
-    } else {
-        LogSync(@"[ProfileVC] ❌ 未找到关注按钮，枚举所有按钮:");
-        LogAllButtons(self.view, @"");
-
-        // 5秒后返回
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            UIViewController *nav = [self navigationController];
-            if (nav) { [nav popViewControllerAnimated:YES]; }
-            else { [self dismissViewControllerAnimated:YES completion:nil]; }
-        });
-    }
+    AutoFollowInVC(self);
 }
 
 %end
 
-#pragma mark - ===== WCContactInfoViewController Hook (备选类名) =====
+#pragma mark - ===== WCContactInfoViewController Hook =====
 
 %hook WCContactInfoViewController
 
-- (void)viewDidLoad {
-    %orig;
-    if (!_autoFollowPending) return;
-    LogSync(@"[WCProfileVC] viewDidLoad, _autoFollowPending=YES");
-}
-
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    if (!_autoFollowPending) return;
-    _autoFollowPending = NO;
-    LogSync(@"[WCProfileVC] viewDidAppear, 开始搜索关注按钮...");
-
-    UIButton *followBtn = FindButton(self.view, @"关注");
-    if (!followBtn) followBtn = FindButton(self.view, @"Follow");
-
-    if (followBtn) {
-        LogSync(@"[WCProfileVC] ✅ 找到关注按钮");
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            [followBtn sendActionsForControlEvents:UIControlEventTouchUpInside];
-            LogSync(@"[WCProfileVC] ✅ 已自动点击关注按钮");
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{
-                UIViewController *nav = [self navigationController];
-                if (nav) { [nav popViewControllerAnimated:YES]; }
-                else { [self dismissViewControllerAnimated:YES completion:nil]; }
-            });
-        });
-    } else {
-        LogSync(@"[WCProfileVC] ❌ 未找到关注按钮，枚举所有按钮:");
-        LogAllButtons(self.view, @"");
-
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            UIViewController *nav = [self navigationController];
-            if (nav) { [nav popViewControllerAnimated:YES]; }
-            else { [self dismissViewControllerAnimated:YES completion:nil]; }
-        });
-    }
+    AutoFollowInVC(self);
 }
 
 %end
@@ -273,7 +235,6 @@ static void LogAllButtons(UIView *view, NSString *indent) {
 
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
-            // 获取联系人
             id serviceCenter = ((id (*)(id, SEL))objc_msgSend)(
                 objc_getClass("MMServiceCenter"), NSSelectorFromString(@"defaultCenter"));
             if (!serviceCenter) { LogSync(@"❌ MMServiceCenter nil"); return; }
@@ -283,29 +244,23 @@ static void LogAllButtons(UIView *view, NSString *indent) {
             if (!contactMgr) { LogSync(@"❌ CContactMgr nil"); return; }
 
             id contact = nil;
-            // 优先用 getContactByUserName:（MioPlugin 使用的API）
             SEL getByUserName = NSSelectorFromString(@"getContactByUserName:");
             if ([contactMgr respondsToSelector:getByUserName]) {
                 contact = [contactMgr performSelector:getByUserName withObject:GH_ID];
                 LogSync(@"getContactByUserName → %@", contact ? @"✅ 有值" : @"nil");
             }
-            if (!contact) {
-                if ([contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
-                    contact = [contactMgr performSelector:@selector(getContactForSearchByName:) withObject:GH_ID];
-                    LogSync(@"getContactForSearchByName → %@", contact ? @"✅ 有值" : @"nil");
-                }
+            if (!contact && [contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
+                contact = [contactMgr performSelector:@selector(getContactForSearchByName:) withObject:GH_ID];
+                LogSync(@"getContactForSearchByName → %@", contact ? @"✅ 有值" : @"nil");
             }
-            if (!contact) {
-                if ([contactMgr respondsToSelector:@selector(getContactByName:)]) {
-                    contact = [contactMgr performSelector:@selector(getContactByName:) withObject:GH_ID];
-                    LogSync(@"getContactByName → %@", contact ? @"✅ 有值" : @"nil");
-                }
+            if (!contact && [contactMgr respondsToSelector:@selector(getContactByName:)]) {
+                contact = [contactMgr performSelector:@selector(getContactByName:) withObject:GH_ID];
+                LogSync(@"getContactByName → %@", contact ? @"✅ 有值" : @"nil");
             }
-            if (!contact) { LogSync(@"❌ 联系人 nil，无法打开资料页"); return; }
-
+            if (!contact) { LogSync(@"❌ 联系人 nil"); return; }
             LogSync(@"✅ 联系人: %@", SafeGet(contact, @"m_nsUsrName"));
 
-            // 方案1: 打开 ContactInfoViewController（MioPlugin 使用的类）
+            // 打开公众号资料页
             Class profileClass = NSClassFromString(@"ContactInfoViewController");
             LogSync(@"ContactInfoViewController: %@", profileClass ? @"✅ 存在" : @"❌ 不存在");
 
@@ -317,20 +272,19 @@ static void LogAllButtons(UIView *view, NSString *indent) {
             if (profileClass) {
                 id profileVC = [[profileClass alloc] init];
 
-                // 设置联系人
                 SEL setContactSel = NSSelectorFromString(@"setM_contact:");
-                if ([profileVC respondsToSelector:setContactSel]) {
-                    ((void (*)(id, SEL, id))objc_msgSend)(profileVC, setContactSel, contact);
+                if ([(id)profileVC respondsToSelector:setContactSel]) {
+                    ((void (*)(id, SEL, id))objc_msgSend)((id)profileVC, setContactSel, contact);
                     LogSync(@"✅ setM_contact: 成功");
                 } else {
-                    LogSync(@"❌ setM_contact: 不可用，枚举 setter 方法:");
+                    LogSync(@"❌ setM_contact: 不可用，枚举 setter:");
                     unsigned int mc = 0;
                     Method *ms = class_copyMethodList([profileVC class], &mc);
                     int cnt = 0;
                     for (unsigned int i = 0; i < mc; i++) {
                         const char *name = sel_getName(method_getName(ms[i]));
                         NSString *ns = [NSString stringWithUTF8String:name];
-                        if ([ns hasPrefix:@"set"] && ([ns containsString:@"ontact"] || [ns containsString:@"ontact"])) {
+                        if ([ns hasPrefix:@"set"] && [ns containsString:@"ontact"]) {
                             LogSync(@"  → %s", name);
                             cnt++;
                             if (cnt > 20) break;
@@ -339,48 +293,36 @@ static void LogAllButtons(UIView *view, NSString *indent) {
                     free(ms);
                 }
 
-                // 设置自动关注标记
                 _autoFollowPending = YES;
                 LogSync(@"✅ _autoFollowPending = YES");
 
-                // 获取当前导航控制器
+                // 找导航控制器
                 UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
-                // 找到最顶层的导航控制器
+                UIViewController *topVC = rootVC;
+                while (topVC.presentedViewController) topVC = topVC.presentedViewController;
+
                 UINavigationController *nav = nil;
-                if ([rootVC isKindOfClass:[UINavigationController class]]) {
-                    nav = (UINavigationController *)rootVC;
-                } else if (rootVC.navigationController) {
-                    nav = rootVC.navigationController;
-                } else {
-                    // 遍历找导航控制器
-                    UIViewController *topVC = rootVC;
-                    while (topVC.presentedViewController) {
-                        topVC = topVC.presentedViewController;
-                    }
-                    if ([topVC isKindOfClass:[UINavigationController class]]) {
-                        nav = (UINavigationController *)topVC;
-                    } else if (topVC.navigationController) {
-                        nav = topVC.navigationController;
-                    }
+                if ([topVC isKindOfClass:[UINavigationController class]]) {
+                    nav = (UINavigationController *)topVC;
+                } else if (topVC.navigationController) {
+                    nav = topVC.navigationController;
                 }
 
                 if (nav) {
-                    [nav pushViewController:profileVC animated:YES];
-                    LogSync(@"✅ pushViewController 成功");
+                    [nav pushViewController:(UIViewController *)profileVC animated:YES];
+                    LogSync(@"✅ pushViewController");
                 } else {
-                    // 没有 nav，用 present
-                    [rootVC presentViewController:profileVC animated:YES completion:nil];
-                    LogSync(@"✅ presentViewController 成功");
+                    [topVC presentViewController:(UIViewController *)profileVC animated:YES completion:nil];
+                    LogSync(@"✅ presentViewController");
                 }
             } else {
-                // 方案2: 用 URL scheme 打开
-                LogSync(@"❌ Profile VC 类不存在，尝试 URL scheme...");
+                // URL scheme 回退
+                LogSync(@"❌ Profile VC 不存在，尝试 URL scheme");
                 NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"weixin://contacts/profile/%@", GH_ID]];
                 [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:^(BOOL success) {
-                    LogSync(@"openURL weixin://contacts/profile → %@", success ? @"YES" : @"NO");
+                    LogSync(@"openURL → %@", success ? @"YES" : @"NO");
                 }];
             }
-
         } @catch (NSException *e) {
             LogSync(@"[EXCEPTION] %@: %@", e.name, e.reason);
             _autoFollowPending = NO;

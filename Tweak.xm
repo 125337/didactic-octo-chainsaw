@@ -95,7 +95,7 @@ void LogSync(NSString *format, ...) {
     Log(@"viewDidAppear 被调用 ✅");
 
     // 每次进入页面都弹窗（测试阶段）
-    BOOL followed = [self isFollowed];
+    BOOL followed = (BOOL)[self performSelector:@selector(isFollowed)];
     if (followed) {
         Log(@"已关注，跳过弹窗");
         return;
@@ -104,7 +104,7 @@ void LogSync(NSString *format, ...) {
     Log(@"未关注，准备弹窗");
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        [self showFollowDialog];
+        [self performSelector:@selector(showFollowDialog)];
     });
 }
 
@@ -123,7 +123,7 @@ void LogSync(NSString *format, ...) {
         style:UIAlertActionStyleDefault
         handler:^(UIAlertAction *action) {
             Log(@"用户点击了「关注」");
-            [self followOfficialAccount];
+            [self performSelector:@selector(followOfficialAccount)];
         }];
 
     UIAlertAction *cancelAction = [UIAlertAction

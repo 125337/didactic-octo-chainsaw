@@ -207,16 +207,15 @@ static inline NSString *SafeGet(id obj, NSString *key) {
         } @catch (NSException *e) {}
 
         // ==== 方案B: addOrUpdateContactToDB:listType:add:modify: (直接写入DB) ====
+        // 注意: 签名显示 arg4=^B, arg5=^B 即 BOOL* 指针参数
         LogSync(@"===== 方案B: addOrUpdateContactToDB:listType:add:modify: =====");
         @try {
             SEL sel = NSSelectorFromString(@"addOrUpdateContactToDB:listType:add:modify:");
             if ([contactMgr respondsToSelector:sel]) {
                 NSMethodSignature *sig = [contactMgr methodSignatureForSelector:sel];
-                LogSync(@"[B] 签名: numberOfArguments=%lu, returnType=%c",
-                        (unsigned long)sig.numberOfArguments, sig.methodReturnType[0]);
-                for (NSUInteger i = 0; i < sig.numberOfArguments; i++) {
-                    LogSync(@"[B] arg%lu: %s", (unsigned long)i, [sig getArgumentTypeAtIndex:i]);
-                }
+                // 检查参数类型，安全调用
+                const char *arg4Type = [sig getArgumentTypeAtIndex:4];
+                const char *arg5Type = [sig getArgumentTypeAtIndex:5];
 
                 NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
                 [inv setTarget:contactMgr];
@@ -224,10 +223,27 @@ static inline NSString *SafeGet(id obj, NSString *key) {
                 [inv setArgument:&contact atIndex:2];
                 unsigned int listType = 2;
                 [inv setArgument:&listType atIndex:3];
-                BOOL add = YES;
-                [inv setArgument:&add atIndex:4];
-                BOOL modify = YES;
-                [inv setArgument:&modify atIndex:5];
+
+                if (arg4Type[0] == '^') {
+                    // BOOL* 指针参数
+                    BOOL addVal = YES;
+                    BOOL *addPtr = &addVal;
+                    [inv setArgument:&addPtr atIndex:4];
+                } else {
+                    BOOL addVal = YES;
+                    [inv setArgument:&addVal atIndex:4];
+                }
+
+                if (arg5Type[0] == '^') {
+                    // BOOL* 指针参数
+                    BOOL modVal = YES;
+                    BOOL *modPtr = &modVal;
+                    [inv setArgument:&modPtr atIndex:5];
+                } else {
+                    BOOL modVal = YES;
+                    [inv setArgument:&modVal atIndex:5];
+                }
+
                 [inv invoke];
                 LogSync(@"[B] 调用完成");
             } else {

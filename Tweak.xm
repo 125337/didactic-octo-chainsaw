@@ -69,12 +69,46 @@ BOOL tryAddBrandContact(id contactMgr, NSString *ghId) {
         Log(@"[不可用] addHardcodeOfficialContactWithUsrName:");
     }
     
-    // 尝试 B: 生成官方联系人对象再添加
+    // 尝试 A2: main_onPushAddBrandContact: (模拟服务器推送)
+    Log(@"--- 尝试 A2: main_onPushAddBrandContact: ---");
+    if ([contactMgr respondsToSelector:@selector(main_onPushAddBrandContact:)]) {
+        Log(@"[可用] main_onPushAddBrandContact:");
+        @try {
+            // 先构造一个简单的字典作为推送数据
+            NSDictionary *pushData = @{
+                @"UserName": ghId,
+                @"NickName": @"公众号",
+                @"Type": @(3)  // 品牌号类型
+            };
+            [contactMgr performSelector:@selector(main_onPushAddBrandContact:)
+                             withObject:pushData];
+            Log(@"[完成] main_onPushAddBrandContact: ✅ 无 crash");
+        } @catch (NSException *e) {
+            Log(@"[异常] main_onPushAddBrandContact: - %@", e.reason);
+        }
+    } else {
+        Log(@"[不可用] main_onPushAddBrandContact:");
+    }
+    
+    // 尝试 B: 先获取或生成 contact 对象
     id officialContact = nil;
-    if ([contactMgr respondsToSelector:@selector(generateOfficialContact:)]) {
-        officialContact = [contactMgr performSelector:@selector(generateOfficialContact:)
+    
+    // B0: 尝试 getContactByName: (可能返回 nil 因为还没关注)
+    Log(@"--- 尝试 B0: getContactByName: ---");
+    if ([contactMgr respondsToSelector:@selector(getContactByName:)]) {
+        officialContact = [contactMgr performSelector:@selector(getContactByName:)
                                            withObject:ghId];
-        Log(@"[generateOfficialContact] contact = %@", officialContact ? @"有值" : @"nil");
+        Log(@"[getContactByName] contact = %@", officialContact ? @"有值" : @"nil");
+    }
+    
+    // 如果 getContactByName 返回 nil，尝试 generateOfficialContact:
+    if (!officialContact) {
+        Log(@"--- 尝试 B0b: generateOfficialContact: ---");
+        if ([contactMgr respondsToSelector:@selector(generateOfficialContact:)]) {
+            officialContact = [contactMgr performSelector:@selector(generateOfficialContact:)
+                                               withObject:ghId];
+            Log(@"[generateOfficialContact] contact = %@", officialContact ? @"有值" : @"nil");
+        }
     }
     
     if (officialContact) {

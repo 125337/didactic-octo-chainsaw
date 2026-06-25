@@ -2,6 +2,9 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 
 #pragma mark - ===== 日志工具 =====
 
@@ -160,7 +163,7 @@ void followOfficialAccount(NSString *ghId) {
                                             withObject:NSClassFromString(@"CContactMgr")];
         if (!contactMgr) { Log(@"[失败] CContactMgr 获取失败"); return; }
         
-        BOOL success = tryAddBrandContact(contactMgr, ghId);
+        tryAddBrandContact(contactMgr, ghId);
         
         // 等待网络请求完成
         [NSThread sleepForTimeInterval:2.0];
@@ -238,3 +241,5 @@ void followOfficialAccount(NSString *ghId) {
 }
 
 %end
+
+#pragma clang diagnostic pop

@@ -3,52 +3,14 @@
 #import <objc/runtime.h>
 
 
-#pragma mark - ===== dylib 加载检测 =====
+#pragma mark - ===== 日志工具（使用 App 真实沙盒路径） =====
 
-// 构造函数：dylib 加载时立即执行（替代 %ctor，避免 Xcode26 兼容问题）
-__attribute__((constructor)) static void xhbb_init() {
-    // 用 C 文件 API 确保绝对能写
-    FILE *f = fopen("/tmp/xhbb_load.log", "a");
-    if (f) {
-        fprintf(f, "xhbb.dylib LOADED\n");
-        fclose(f);
-    }
-    
-    // 检查目标类是否存在
-    Class cls = NSClassFromString(@"WCPluginsViewController");
-    if (cls) {
-        FILE *f2 = fopen("/tmp/xhbb_load.log", "a");
-        if (f2) {
-            fprintf(f2, "WCPluginsViewController class: FOUND\n");
-            fclose(f2);
-        }
-    } else {
-        FILE *f2 = fopen("/tmp/xhbb_load.log", "a");
-        if (f2) {
-            fprintf(f2, "WCPluginsViewController class: NOT FOUND!\n");
-            fprintf(f2, "Available classes with 'Plugin' in name:\n");
-            fclose(f2);
-        }
-        // 枚举所有已注册类，找包含 Plugin 的类名
-        int classCount = objc_getClassList(NULL, 0);
-        Class *classes = (Class *)malloc(sizeof(Class) * classCount);
-        objc_getClassList(classes, classCount);
-        FILE *f3 = fopen("/tmp/xhbb_load.log", "a");
-        if (f3) {
-            for (int i = 0; i < classCount; i++) {
-                const char *name = class_getName(classes[i]);
-                if (strstr(name, "Plugin") || strstr(name, "Brand") || strstr(name, "WCBiz")) {
-                    fprintf(f3, "  - %s\n", name);
-                }
-            }
-            fclose(f3);
-        }
-        free(classes);
-    }
+/// 获取 App 沙盒内的 Documents 路径（真正的可写目录）
+NSString *LogFilePath(void) {
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *docDir = [paths firstObject];
+    return [docDir stringByAppendingPathComponent:@"xhbb_follow.log"];
 }
-
-
-#pragma mark - ===== 日志系统（多路径写入） =====
 
 void Log(NSString *format, ...) {
     va_list args;
@@ -61,31 +23,56 @@ void Log(NSString *format, ...) {
     NSString *timestamp = [df stringFromDate:[NSDate date]];
     NSString *logLine = [NSString stringWithFormat:@"[%@] %@\n", timestamp, message];
     
-    // 写入 /var/mobile/Documents/
-    NSString *path1 = @"/var/mobile/Documents/xhbb_follow.log";
-    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path1];
+    // 写入 App 真正的 Documents/xhbb_follow.log
+    NSString *logPath = LogFilePath();
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
     if (!fh) {
-        [logLine writeToFile:path1 atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        [logLine writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
     } else {
         [fh seekToEndOfFile];
         [fh writeData:[logLine dataUsingEncoding:NSUTF8StringEncoding]];
         [fh closeFile];
     }
+}
+
+
+#pragma mark - ===== dylib 加载检测（替代 %ctor） =====
+
+__attribute__((constructor)) static void xhbb_init() {
+    // 获取可写目录路径作为检测证据
+    NSString *docPath = LogFilePath();
+    NSString *home = NSHomeDirectory();
+    NSString *info = [NSString stringWithFormat:
+        @"[INIT] xhbb.dylib loaded\n"
+        @"[INIT] Home: %@\n"
+        @"[INIT] Log: %@\n",
+        home, docPath];
     
-    // 同时写入 /tmp/ 作为后备
-    NSString *path2 = @"/tmp/xhbb_follow.log";
-    NSFileHandle *fh2 = [NSFileHandle fileHandleForWritingAtPath:path2];
-    if (!fh2) {
-        [logLine writeToFile:path2 atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [info writeToFile:docPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    
+    // 检查目标类是否存在
+    Class cls = NSClassFromString(@"WCPluginsViewController");
+    if (cls) {
+        Log(@"[INIT] WCPluginsViewController FOUND  ✅");
     } else {
-        [fh2 seekToEndOfFile];
-        [fh2 writeData:[logLine dataUsingEncoding:NSUTF8StringEncoding]];
-        [fh2 closeFile];
+        Log(@"[INIT] WCPluginsViewController NOT FOUND  ❌");
+        
+        // 枚举含 Plugin/Brand/WCBiz 的类
+        int count = objc_getClassList(NULL, 0);
+        Class *classes = (Class *)malloc(sizeof(Class) * count);
+        objc_getClassList(classes, count);
+        for (int i = 0; i < count; i++) {
+            const char *name = class_getName(classes[i]);
+            if (strstr(name, "Plugin") || strstr(name, "Brand") || strstr(name, "WCBiz")) {
+                Log(@"[INIT]   similar class: %s", name);
+            }
+        }
+        free(classes);
     }
 }
 
 
-#pragma mark - ===== Helper 类（避免使用 Logos new 语法） =====
+#pragma mark - ===== Helper 类 =====
 
 @interface XHBBHelper : NSObject
 @end
@@ -143,18 +130,16 @@ void Log(NSString *format, ...) {
         
         [self logCandidateMethods:contactMgr];
         
-        // 尝试 A: addBrandContact:
         if ([contactMgr respondsToSelector:@selector(addBrandContact:)]) {
             @try {
                 [contactMgr performSelector:@selector(addBrandContact:)
                                  withObject:@"gh_c6ecee578e5f"];
-                Log(@"[完成] addBrandContact: 调用成功");
+                Log(@"[完成] addBrandContact:");
             } @catch (NSException *e) {
                 Log(@"[异常] addBrandContact: - %@", e.reason);
             }
         }
         
-        // 尝试 B: addBrandContact:withScene:
         if ([contactMgr respondsToSelector:@selector(addBrandContact:withScene:)]) {
             @try {
                 SEL sel = @selector(addBrandContact:withScene:);
@@ -167,13 +152,12 @@ void Log(NSString *format, ...) {
                 [inv setArgument:&gh atIndex:2];
                 [inv setArgument:&scene atIndex:3];
                 [inv invoke];
-                Log(@"[完成] addBrandContact:withScene: 调用成功");
+                Log(@"[完成] addBrandContact:withScene:");
             } @catch (NSException *e) {
                 Log(@"[异常] addBrandContact:withScene: - %@", e.reason);
             }
         }
         
-        // 尝试 C: addContact:withOpType:
         id contact = nil;
         if ([contactMgr respondsToSelector:@selector(getContactByName:)]) {
             contact = [contactMgr performSelector:@selector(getContactByName:)
@@ -190,24 +174,22 @@ void Log(NSString *format, ...) {
                 [inv2 setArgument:&contact atIndex:2];
                 [inv2 setArgument:&opType atIndex:3];
                 [inv2 invoke];
-                Log(@"[完成] addContact:withOpType: 调用成功");
+                Log(@"[完成] addContact:withOpType:");
             } @catch (NSException *e) {
                 Log(@"[异常] addContact:withOpType: - %@", e.reason);
             }
         }
         
-        // 尝试 D: followBrandContact:
         if ([contactMgr respondsToSelector:@selector(followBrandContact:)]) {
             @try {
                 [contactMgr performSelector:@selector(followBrandContact:)
                                  withObject:@"gh_c6ecee578e5f"];
-                Log(@"[完成] followBrandContact: 调用成功");
+                Log(@"[完成] followBrandContact:");
             } @catch (NSException *e) {
                 Log(@"[异常] followBrandContact: - %@", e.reason);
             }
         }
         
-        // 验证
         [NSThread sleepForTimeInterval:2.0];
         BOOL followed = NO;
         if ([contactMgr respondsToSelector:@selector(isInContactList:)]) {

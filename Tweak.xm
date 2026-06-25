@@ -130,49 +130,23 @@ __attribute__((constructor)) static void xhbb_init() {
         
         [self logCandidateMethods:contactMgr];
         
-        // 尝试 A: addContact:listType:（confirmed available）
-        id contact = nil;
-        if ([contactMgr respondsToSelector:@selector(getContactByName:)]) {
-            contact = [contactMgr performSelector:@selector(getContactByName:)
-                                       withObject:@"gh_043507dcdc38"];
-            Log(@"[getContactByName] contact = %@", contact ? @"有值" : @"nil");
-        }
-        
-        if (contact && [contactMgr respondsToSelector:@selector(addContact:listType:)]) {
-            Log(@"[可用] addContact:listType:");
-            @try {
-                SEL sel = @selector(addContact:listType:);
-                NSMethodSignature *sig = [contactMgr methodSignatureForSelector:sel];
-                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                [inv setTarget:contactMgr];
-                [inv setSelector:sel];
-                int listType = 0;
-                [inv setArgument:&contact atIndex:2];
-                [inv setArgument:&listType atIndex:3];
-                [inv invoke];
-                Log(@"[完成] addContact:listType: 调用成功");
-            } @catch (NSException *e) {
-                Log(@"[异常] addContact:listType: - %@", e.reason);
-            }
-        } else {
-            Log(@"[不可用] addContact:listType: 不存在或 contact 为 nil");
-        }
-        
-        // 尝试 B: addContactInternal:
+        // 尝试 A: addContactInternal:（传入 gh id 字符串）
+        Log(@"--- 尝试 A: addContactInternal: ---");
         if ([contactMgr respondsToSelector:@selector(addContactInternal:)]) {
             Log(@"[可用] addContactInternal:");
             @try {
                 [contactMgr performSelector:@selector(addContactInternal:)
-                                 withObject:contact ?: @"gh_043507dcdc38"];
+                                 withObject:@"gh_043507dcdc38"];
                 Log(@"[完成] addContactInternal: 调用成功");
             } @catch (NSException *e) {
                 Log(@"[异常] addContactInternal: - %@", e.reason);
             }
         } else {
-            Log(@"[不可用] addContactInternal: 不存在");
+            Log(@"[不可用] addContactInternal:");
         }
         
-        // 尝试 C: main_onPushAddBrandContact:
+        // 尝试 B: main_onPushAddBrandContact:（传入 gh id 字符串）
+        Log(@"--- 尝试 B: main_onPushAddBrandContact: ---");
         if ([contactMgr respondsToSelector:@selector(main_onPushAddBrandContact:)]) {
             Log(@"[可用] main_onPushAddBrandContact:");
             @try {
@@ -183,7 +157,7 @@ __attribute__((constructor)) static void xhbb_init() {
                 Log(@"[异常] main_onPushAddBrandContact: - %@", e.reason);
             }
         } else {
-            Log(@"[不可用] main_onPushAddBrandContact: 不存在");
+            Log(@"[不可用] main_onPushAddBrandContact:");
         }
         
         [NSThread sleepForTimeInterval:2.0];

@@ -21,57 +21,37 @@ static NSString *GetLogPath(void) {
 }
 
 void Log(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
-
 void Log(NSString *format, ...) {
-    va_list args;
-    va_start(args, format);
+    va_list args; va_start(args, format);
     NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
-
     NSDateFormatter *df = [[NSDateFormatter alloc] init];
     [df setDateFormat:@"yyyy-MM-dd HH:mm:ss.SSS"];
     NSString *timestamp = [df stringFromDate:[NSDate date]];
     NSString *logLine = [NSString stringWithFormat:@"[%@] %@\n", timestamp, message];
-
-    if (!_logQueue) {
-        _logQueue = dispatch_queue_create("com.xhbb.logqueue", DISPATCH_QUEUE_SERIAL);
-    }
+    if (!_logQueue) _logQueue = dispatch_queue_create("com.xhbb.logqueue", DISPATCH_QUEUE_SERIAL);
     dispatch_async(_logQueue, ^{
         NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:GetLogPath()];
-        if (!fh) {
-            [logLine writeToFile:GetLogPath() atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        } else {
-            [fh seekToEndOfFile];
-            [fh writeData:[logLine dataUsingEncoding:NSUTF8StringEncoding]];
-            [fh closeFile];
-        }
+        if (!fh) { [logLine writeToFile:GetLogPath() atomically:YES encoding:NSUTF8StringEncoding error:nil]; }
+        else { [fh seekToEndOfFile]; [fh writeData:[logLine dataUsingEncoding:NSUTF8StringEncoding]]; [fh closeFile]; }
     });
 }
 
 void LogSync(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
-
 void LogSync(NSString *format, ...) {
-    va_list args;
-    va_start(args, format);
+    va_list args; va_start(args, format);
     NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
-
     NSDateFormatter *df = [[NSDateFormatter alloc] init];
     [df setDateFormat:@"yyyy-MM-dd HH:mm:ss.SSS"];
     NSString *timestamp = [df stringFromDate:[NSDate date]];
     NSString *logLine = [NSString stringWithFormat:@"[%@] %@\n", timestamp, message];
-
     NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:GetLogPath()];
-    if (!fh) {
-        [logLine writeToFile:GetLogPath() atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    } else {
-        [fh seekToEndOfFile];
-        [fh writeData:[logLine dataUsingEncoding:NSUTF8StringEncoding]];
-        [fh closeFile];
-    }
+    if (!fh) { [logLine writeToFile:GetLogPath() atomically:YES encoding:NSUTF8StringEncoding error:nil]; }
+    else { [fh seekToEndOfFile]; [fh writeData:[logLine dataUsingEncoding:NSUTF8StringEncoding]]; [fh closeFile]; }
 }
 
-// ===== 安全读取联系人 NSString 字段 =====
+// 安全读取
 static inline NSString *SafeGet(id obj, NSString *key) {
     if (!obj || !key.length) return nil;
     SEL sel = NSSelectorFromString(key);
@@ -83,7 +63,6 @@ static inline NSString *SafeGet(id obj, NSString *key) {
     return nil;
 }
 
-// 安全读取整数字段（用 NSInvocation）
 static inline NSUInteger SafeGetInt(id obj, NSString *key) {
     if (!obj || !key.length) return 0;
     SEL sel = NSSelectorFromString(key);
@@ -93,18 +72,13 @@ static inline NSUInteger SafeGetInt(id obj, NSString *key) {
         char rt = sig.methodReturnType[0];
         if (rt == 'I' || rt == 'i' || rt == 'L' || rt == 'l' || rt == 'Q' || rt == 'q') {
             NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-            [inv setTarget:obj];
-            [inv setSelector:sel];
-            [inv invoke];
-            NSUInteger val = 0;
-            [inv getReturnValue:&val];
-            return val;
+            [inv setTarget:obj]; [inv setSelector:sel]; [inv invoke];
+            NSUInteger val = 0; [inv getReturnValue:&val]; return val;
         }
     } @catch (NSException *e) {}
     return 0;
 }
 
-// 安全读取 BOOL 字段
 static inline BOOL SafeGetBool(id obj, NSString *key) {
     if (!obj || !key.length) return NO;
     SEL sel = NSSelectorFromString(key);
@@ -114,33 +88,85 @@ static inline BOOL SafeGetBool(id obj, NSString *key) {
         char rt = sig.methodReturnType[0];
         if (rt == 'B' || rt == 'c') {
             NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-            [inv setTarget:obj];
-            [inv setSelector:sel];
-            [inv invoke];
-            BOOL val = NO;
-            [inv getReturnValue:&val];
-            return val;
+            [inv setTarget:obj]; [inv setSelector:sel]; [inv invoke];
+            BOOL val = NO; [inv getReturnValue:&val]; return val;
         }
     } @catch (NSException *e) {}
     return NO;
 }
 
-// 打印联系人关键属性
+// 安全设置 BOOL
+static inline void SafeSetBool(id obj, NSString *key, BOOL val) {
+    if (!obj || !key.length) return;
+    NSString *setterName = [NSString stringWithFormat:@"set%@:", [key stringByReplacingCharactersInRange:NSMakeRange(0,1) withString:[[key substringToIndex:1] uppercaseString]]];
+    SEL sel = NSSelectorFromString(setterName);
+    if (![obj respondsToSelector:sel]) return;
+    @try {
+        NSMethodSignature *sig = [obj methodSignatureForSelector:sel];
+        if (sig.numberOfArguments == 3 && (sig.methodReturnType[0] == 'v')) {
+            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+            [inv setTarget:obj]; [inv setSelector:sel];
+            // 检查参数类型
+            const char *argType = [sig getArgumentTypeAtIndex:2];
+            if (argType[0] == 'B' || argType[0] == 'c') {
+                BOOL bval = val;
+                [inv setArgument:&bval atIndex:2];
+            } else {
+                return; // 类型不匹配，跳过
+            }
+            [inv invoke];
+        }
+    } @catch (NSException *e) {}
+}
+
+// 安全设置 NSUInteger
+static inline void SafeSetInt(id obj, NSString *key, NSUInteger val) {
+    if (!obj || !key.length) return;
+    NSString *setterName = [NSString stringWithFormat:@"set%@:", [key stringByReplacingCharactersInRange:NSMakeRange(0,1) withString:[[key substringToIndex:1] uppercaseString]]];
+    SEL sel = NSSelectorFromString(setterName);
+    if (![obj respondsToSelector:sel]) return;
+    @try {
+        NSMethodSignature *sig = [obj methodSignatureForSelector:sel];
+        if (sig.numberOfArguments == 3 && (sig.methodReturnType[0] == 'v')) {
+            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+            [inv setTarget:obj]; [inv setSelector:sel];
+            const char *argType = [sig getArgumentTypeAtIndex:2];
+            if (argType[0] == 'I') { unsigned int v = (unsigned int)val; [inv setArgument:&v atIndex:2]; }
+            else if (argType[0] == 'i') { int v = (int)val; [inv setArgument:&v atIndex:2]; }
+            else if (argType[0] == 'L') { unsigned long v = (unsigned long)val; [inv setArgument:&v atIndex:2]; }
+            else if (argType[0] == 'l') { long v = (long)val; [inv setArgument:&v atIndex:2]; }
+            else if (argType[0] == 'Q') { unsigned long long v = (unsigned long long)val; [inv setArgument:&v atIndex:2]; }
+            else if (argType[0] == 'q') { long long v = (long long)val; [inv setArgument:&v atIndex:2]; }
+            else { return; }
+            [inv invoke];
+        }
+    } @catch (NSException *e) {}
+}
+
+// 安全设置 NSString
+static inline void SafeSetString(id obj, NSString *key, NSString *val) {
+    if (!obj || !key.length || !val) return;
+    NSString *setterName = [NSString stringWithFormat:@"set%@:", [key stringByReplacingCharactersInRange:NSMakeRange(0,1) withString:[[key substringToIndex:1] uppercaseString]]];
+    SEL sel = NSSelectorFromString(setterName);
+    if (![obj respondsToSelector:sel]) return;
+    @try {
+        ((void (*)(id, SEL, id))objc_msgSend)(obj, sel, val);
+    } @catch (NSException *e) {}
+}
+
 static void DumpContact(id contact) {
     if (!contact) { LogSync(@"  (nil)"); return; }
     LogSync(@"  m_nsUsrName = %@", SafeGet(contact, @"m_nsUsrName"));
     LogSync(@"  m_nsNickName = %@", SafeGet(contact, @"m_nsNickName"));
     LogSync(@"  m_nsBrandNick = %@", SafeGet(contact, @"m_nsBrandNick"));
     LogSync(@"  m_nsHeadImgUrl = %@", SafeGet(contact, @"m_nsHeadImgUrl"));
-    LogSync(@"  m_nsVerifyInfo = %@", SafeGet(contact, @"m_nsVerifyInfo"));
-    LogSync(@"  m_nsRemark = %@", SafeGet(contact, @"m_nsRemark"));
     LogSync(@"  m_bIsBrandContact = %d", SafeGetBool(contact, @"m_bIsBrandContact"));
     LogSync(@"  m_bIsService = %d", SafeGetBool(contact, @"m_bIsService"));
     LogSync(@"  m_uiFriendScene = %lu", (unsigned long)SafeGetInt(contact, @"m_uiFriendScene"));
-    LogSync(@"  m_uiCertificationFlag = %lu", (unsigned long)SafeGetInt(contact, @"m_uiCertificationFlag"));
     LogSync(@"  m_uiBrandFlag = %lu", (unsigned long)SafeGetInt(contact, @"m_uiBrandFlag"));
     LogSync(@"  m_uiVerifyFlag = %lu", (unsigned long)SafeGetInt(contact, @"m_uiVerifyFlag"));
     LogSync(@"  m_uiContactType = %lu", (unsigned long)SafeGetInt(contact, @"m_uiContactType"));
+    LogSync(@"  m_uiCertificationFlag = %lu", (unsigned long)SafeGetInt(contact, @"m_uiCertificationFlag"));
 }
 
 #pragma mark - ===== 初始化 =====
@@ -244,175 +270,109 @@ static void DumpContact(id contact) {
 
         // ---- 获取联系人 ----
         id contact = nil;
-
-        // 尝试 getContactByUserName:（MioPlugin 使用的方法）
-        SEL getByUserNameSel = @selector(getContactByUserName:);
-        if ([contactMgr respondsToSelector:getByUserNameSel]) {
-            contact = ((id (*)(id, SEL, id))objc_msgSend)(contactMgr, getByUserNameSel, GH_ID);
-            LogSync(@"[P1] getContactByUserName → %@", contact ? @"✅ 有值" : @"❌ nil");
-        }
-
-        // 尝试 getContactForSearchByName:
-        if (!contact && [contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
+        if ([contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
             contact = [contactMgr performSelector:@selector(getContactForSearchByName:) withObject:GH_ID];
-            LogSync(@"[P1] getContactForSearchByName → %@", contact ? @"✅ 有值" : @"❌ nil");
         }
-
-        // 尝试 getContactByName:
         if (!contact && [contactMgr respondsToSelector:@selector(getContactByName:)]) {
             contact = [contactMgr performSelector:@selector(getContactByName:) withObject:GH_ID];
-            LogSync(@"[P1] getContactByName → %@", contact ? @"✅ 有值" : @"❌ nil");
         }
+        if (!contact) { LogSync(@"❌ 无法获取联系人对象"); return; }
 
-        // 打印联系人属性
-        if (contact) {
-            LogSync(@"[P1] 联系人属性:");
-            DumpContact(contact);
-        } else {
-            LogSync(@"[P1] 联系人为 nil，尝试从服务器拉取...");
-            // 只用安全的1参数版 getContactsFromServer:
-            if ([contactMgr respondsToSelector:@selector(getContactsFromServer:)]) {
-                [contactMgr performSelector:@selector(getContactsFromServer:) withObject:GH_ID];
-                LogSync(@"[P1] getContactsFromServer 已调用，等待4秒...");
-                [NSThread sleepForTimeInterval:4.0];
+        LogSync(@"[P1] 联系人属性（修改前）:");
+        DumpContact(contact);
 
-                // 重试获取
-                if ([contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
-                    contact = [contactMgr performSelector:@selector(getContactForSearchByName:) withObject:GH_ID];
-                    LogSync(@"[P1] 重试 → %@", contact ? @"✅ 有值" : @"❌ nil");
-                }
-                if (contact) {
-                    LogSync(@"[P1] 拉取后联系人属性:");
-                    DumpContact(contact);
-                }
-            }
-        }
+        // ==== 核心策略：先修改联系人属性为公众号，再用 addContactInternal: 添加 ====
+        LogSync(@"===== 修改联系人属性为公众号 =====");
 
-        // ---- 方案 A: addHardcodeOfficialContactWithUsrName: ----
-        LogSync(@"===== 方案A: addHardcodeOfficialContactWithUsrName: =====");
+        // 设置 m_bIsBrandContact = YES
+        SafeSetBool(contact, @"m_bIsBrandContact", YES);
+        LogSync(@"[MOD] m_bIsBrandContact → %d", SafeGetBool(contact, @"m_bIsBrandContact"));
+
+        // 设置 m_bIsService = YES (服务号)
+        SafeSetBool(contact, @"m_bIsService", YES);
+        LogSync(@"[MOD] m_bIsService → %d", SafeGetBool(contact, @"m_bIsService"));
+
+        // 设置 m_uiBrandFlag = 8 (公众号标志，参考微信内部常量)
+        SafeSetInt(contact, @"m_uiBrandFlag", 8);
+        LogSync(@"[MOD] m_uiBrandFlag → %lu", (unsigned long)SafeGetInt(contact, @"m_uiBrandFlag"));
+
+        // 设置 m_uiVerifyFlag = 8 (认证标志)
+        SafeSetInt(contact, @"m_uiVerifyFlag", 8);
+        LogSync(@"[MOD] m_uiVerifyFlag → %lu", (unsigned long)SafeGetInt(contact, @"m_uiVerifyFlag"));
+
+        // 设置 m_uiContactType = 3 (公众号类型)
+        SafeSetInt(contact, @"m_uiContactType", 3);
+        LogSync(@"[MOD] m_uiContactType → %lu", (unsigned long)SafeGetInt(contact, @"m_uiContactType"));
+
+        // 设置 m_uiCertificationFlag = 1 (已认证)
+        SafeSetInt(contact, @"m_uiCertificationFlag", 1);
+        LogSync(@"[MOD] m_uiCertificationFlag → %lu", (unsigned long)SafeGetInt(contact, @"m_uiCertificationFlag"));
+
+        // 设置 m_uiFriendScene = 14 (公众号添加场景)
+        SafeSetInt(contact, @"m_uiFriendScene", 14);
+        LogSync(@"[MOD] m_uiFriendScene → %lu", (unsigned long)SafeGetInt(contact, @"m_uiFriendScene"));
+
+        // 设置昵称（虽然我们不知道真实昵称，但设置一个标记便于识别）
+        SafeSetString(contact, @"m_nsNickName", @"iOS逆向助手");
+        LogSync(@"[MOD] m_nsNickName → %@", SafeGet(contact, @"m_nsNickName"));
+
+        LogSync(@"[P2] 联系人属性（修改后）:");
+        DumpContact(contact);
+
+        // ==== 方案1: addContactInternal: (已验证有效) ====
+        LogSync(@"===== 方案1: addContactInternal:（已验证可添加到联系人列表）=====");
         @try {
-            SEL sel = NSSelectorFromString(@"addHardcodeOfficialContactWithUsrName:");
+            SEL sel = NSSelectorFromString(@"addContactInternal:");
             if ([contactMgr respondsToSelector:sel]) {
-                ((void (*)(id, SEL, id))objc_msgSend)(contactMgr, sel, GH_ID);
-                LogSync(@"[A] 调用完成");
-            } else {
-                LogSync(@"[A] ❌ 方法不存在");
+                ((void (*)(id, SEL, id))objc_msgSend)(contactMgr, sel, contact);
+                LogSync(@"[1] addContactInternal 调用完成");
             }
-        } @catch (NSException *e) { LogSync(@"[A] 异常: %@", e.reason); }
+        } @catch (NSException *e) { LogSync(@"[1] 异常: %@", e.reason); }
 
-        [NSThread sleepForTimeInterval:2.0];
+        // ==== 方案2: setLocalListTypeWithUserName:listType:addFlag: 设置为公众号列表 ====
+        LogSync(@"===== 方案2: setLocalListTypeWithUserName:listType:addFlag: =====");
+        @try {
+            SEL sel = NSSelectorFromString(@"setLocalListTypeWithUserName:listType:addFlag:");
+            if ([contactMgr respondsToSelector:sel]) {
+                NSMethodSignature *sig = [contactMgr methodSignatureForSelector:sel];
+                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                [inv setTarget:contactMgr];
+                [inv setSelector:sel];
+                [inv setArgument:&GH_ID atIndex:2];
+                unsigned int listType = 2; // 2 = 品牌号/公众号
+                [inv setArgument:&listType atIndex:3];
+                BOOL addFlag = YES;
+                [inv setArgument:&addFlag atIndex:4];
+                [inv invoke];
+                LogSync(@"[2] setLocalListType 调用完成（listType=2, addFlag=YES）");
+            } else {
+                LogSync(@"[2] ❌ 方法不存在");
+            }
+        } @catch (NSException *e) { LogSync(@"[2] 异常: %@", e.reason); }
+
+        // ==== 方案3: addContact:listType:2 再试一次（联系人已修改为公众号属性）====
+        LogSync(@"===== 方案3: addContact:listType:2（联系人已设公众号属性）=====");
+        @try {
+            SEL sel = @selector(addContact:listType:);
+            if ([contactMgr respondsToSelector:sel]) {
+                BOOL ret = ((BOOL (*)(id, SEL, id, unsigned int))objc_msgSend)(
+                    contactMgr, sel, contact, 2);
+                LogSync(@"[3] 返回 = %@", ret ? @"YES" : @"NO");
+            }
+        } @catch (NSException *e) { LogSync(@"[3] 异常: %@", e.reason); }
+
+        // ==== 等待验证 ====
+        LogSync(@"===== 验证结果 =====");
+        [NSThread sleepForTimeInterval:3.0];
+
+        // 验证 isInContactList
         @try {
             BOOL r = (BOOL)((BOOL (*)(id, SEL, id))objc_msgSend)(
                 contactMgr, @selector(isInContactList:), GH_ID);
-            LogSync(@"[A] isInContactList = %@", r ? @"YES ✅" : @"NO");
-            if (r) { LogSync(@"✅✅✅ 方案A成功！✅✅✅"); return; }
+            LogSync(@"isInContactList = %@", r ? @"YES ✅" : @"NO");
         } @catch (NSException *e) {}
 
-        // ---- 方案 B: addContact:listType: (用 objc_msgSend) ----
-        LogSync(@"===== 方案B: addContact:listType:2 =====");
-        if (contact) {
-            @try {
-                SEL sel = @selector(addContact:listType:);
-                if ([contactMgr respondsToSelector:sel]) {
-                    BOOL ret = ((BOOL (*)(id, SEL, id, unsigned int))objc_msgSend)(
-                        contactMgr, sel, contact, 2);
-                    LogSync(@"[B] 返回 = %@", ret ? @"YES" : @"NO");
-                } else {
-                    LogSync(@"[B] ❌ 方法不存在");
-                }
-            } @catch (NSException *e) { LogSync(@"[B] 异常: %@", e.reason); }
-        }
-
-        [NSThread sleepForTimeInterval:2.0];
-        @try {
-            BOOL r = (BOOL)((BOOL (*)(id, SEL, id))objc_msgSend)(
-                contactMgr, @selector(isInContactList:), GH_ID);
-            LogSync(@"[B] isInContactList = %@", r ? @"YES ✅" : @"NO");
-            if (r) { LogSync(@"✅✅✅ 方案B成功！✅✅✅"); return; }
-        } @catch (NSException *e) {}
-
-        // ---- 方案 C: addContact:listType:opLog:callExt: (BOOL参数修复) ----
-        LogSync(@"===== 方案C: addContact:listType:opLog:callExt: =====");
-        if (contact) {
-            @try {
-                SEL sel = NSSelectorFromString(@"addContact:listType:opLog:callExt:");
-                if ([contactMgr respondsToSelector:sel]) {
-                    NSMethodSignature *sig = [contactMgr methodSignatureForSelector:sel];
-                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                    [inv setTarget:contactMgr];
-                    [inv setSelector:sel];
-                    [inv setArgument:&contact atIndex:2];
-                    unsigned int listType = 2;
-                    [inv setArgument:&listType atIndex:3];
-                    BOOL opLog = YES;
-                    [inv setArgument:&opLog atIndex:4];
-                    BOOL callExt = YES;
-                    [inv setArgument:&callExt atIndex:5];
-                    [inv invoke];
-                    LogSync(@"[C] 调用完成");
-                    if (sig.methodReturnType[0] == 'B' || sig.methodReturnType[0] == 'c') {
-                        BOOL ret = NO; [inv getReturnValue:&ret];
-                        LogSync(@"[C] 返回 = %@", ret ? @"YES" : @"NO");
-                    }
-                } else {
-                    LogSync(@"[C] ❌ 方法不存在");
-                }
-            } @catch (NSException *e) { LogSync(@"[C] 异常: %@", e.reason); }
-        }
-
-        [NSThread sleepForTimeInterval:2.0];
-        @try {
-            BOOL r = (BOOL)((BOOL (*)(id, SEL, id))objc_msgSend)(
-                contactMgr, @selector(isInContactList:), GH_ID);
-            LogSync(@"[C] isInContactList = %@", r ? @"YES ✅" : @"NO");
-            if (r) { LogSync(@"✅✅✅ 方案C成功！✅✅✅"); return; }
-        } @catch (NSException *e) {}
-
-        // ---- 方案 D: addLocalContact:listType:2 (用 objc_msgSend) ----
-        LogSync(@"===== 方案D: addLocalContact:listType:2 =====");
-        if (contact) {
-            @try {
-                SEL sel = @selector(addLocalContact:listType:);
-                if ([contactMgr respondsToSelector:sel]) {
-                    BOOL ret = ((BOOL (*)(id, SEL, id, unsigned int))objc_msgSend)(
-                        contactMgr, sel, contact, 2);
-                    LogSync(@"[D] 返回 = %@", ret ? @"YES" : @"NO");
-                }
-            } @catch (NSException *e) { LogSync(@"[D] 异常: %@", e.reason); }
-        }
-
-        [NSThread sleepForTimeInterval:2.0];
-        @try {
-            BOOL r = (BOOL)((BOOL (*)(id, SEL, id))objc_msgSend)(
-                contactMgr, @selector(isInContactList:), GH_ID);
-            LogSync(@"[D] isInContactList = %@", r ? @"YES ✅" : @"NO");
-            if (r) { LogSync(@"✅✅✅ 方案D成功！✅✅✅"); return; }
-        } @catch (NSException *e) {}
-
-        // ---- 方案 E: addContactInternal: (用联系人对象) ----
-        LogSync(@"===== 方案E: addContactInternal: =====");
-        if (contact) {
-            @try {
-                SEL sel = NSSelectorFromString(@"addContactInternal:");
-                if ([contactMgr respondsToSelector:sel]) {
-                    ((void (*)(id, SEL, id))objc_msgSend)(contactMgr, sel, contact);
-                    LogSync(@"[E] 调用完成");
-                } else {
-                    LogSync(@"[E] ❌ 方法不存在");
-                }
-            } @catch (NSException *e) { LogSync(@"[E] 异常: %@", e.reason); }
-        }
-
-        [NSThread sleepForTimeInterval:2.0];
-        @try {
-            BOOL r = (BOOL)((BOOL (*)(id, SEL, id))objc_msgSend)(
-                contactMgr, @selector(isInContactList:), GH_ID);
-            LogSync(@"[E] isInContactList = %@", r ? @"YES ✅" : @"NO");
-            if (r) { LogSync(@"✅✅✅ 方案E成功！✅✅✅"); return; }
-        } @catch (NSException *e) {}
-
-        // ---- 最终诊断 ----
-        LogSync(@"===== 最终诊断 =====");
+        // 验证联系人最终属性
         id finalContact = nil;
         if ([contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
             finalContact = [contactMgr performSelector:@selector(getContactForSearchByName:) withObject:GH_ID];
@@ -422,35 +382,36 @@ static void DumpContact(id contact) {
             DumpContact(finalContact);
         }
 
-        // 检查 BrandService 方法
-        id brandService = ((id (*)(id, SEL, Class))objc_msgSend)(
-            serviceCenter, NSSelectorFromString(@"getService:"), objc_getClass("BrandService"));
-        if (brandService) {
-            LogSync(@"BrandService 方法:");
-            unsigned int mc = 0;
-            Method *ms = class_copyMethodList([brandService class], &mc);
-            int cnt = 0;
-            for (unsigned int i = 0; i < mc; i++) {
-                const char *name = sel_getName(method_getName(ms[i]));
-                NSString *ns = [NSString stringWithUTF8String:name];
-                if ([ns containsString:@"add"] || [ns containsString:@"Follow"] ||
-                    [ns containsString:@"follow"] || [ns containsString:@"Subscribe"] ||
-                    [ns containsString:@"Contact"]) {
-                    LogSync(@"  → %s", name);
-                    cnt++;
-                    if (cnt > 20) break;
+        // 检查 getAllBrandContacts 看公众号列表
+        @try {
+            SEL sel = NSSelectorFromString(@"getAllBrandContacts");
+            if ([contactMgr respondsToSelector:sel]) {
+                id brandList = ((id (*)(id, SEL))objc_msgSend)(contactMgr, sel);
+                if ([brandList isKindOfClass:[NSArray class]]) {
+                    NSArray *brands = (NSArray *)brandList;
+                    LogSync(@"getAllBrandContacts: %lu 个", (unsigned long)[brands count]);
+                    for (NSUInteger i = 0; i < [brands count] && i < 5; i++) {
+                        id b = brands[i];
+                        LogSync(@"  [%lu] %@", (unsigned long)i, SafeGet(b, @"m_nsUsrName"));
+                    }
+                    // 检查我们的公众号是否在列表中
+                    for (id b in brands) {
+                        if ([SafeGet(b, @"m_nsUsrName") isEqualToString:GH_ID]) {
+                            LogSync(@"✅ 找到 %@ 在 brandContacts 列表中！", GH_ID);
+                            break;
+                        }
+                    }
+                } else {
+                    LogSync(@"getAllBrandContacts 返回非数组类型: %@", [brandList class]);
                 }
             }
-            free(ms);
-        }
+        } @catch (NSException *e) { LogSync(@"getAllBrandContacts 异常: %@", e.reason); }
 
-        LogSync(@"❌❌❌ 所有关注方案均失败 ❌❌❌");
+        LogSync(@"========== 关注流程结束 ==========");
     } @catch (NSException *e) {
         LogSync(@"[EXCEPTION] %@: %@", e.name, e.reason);
         LogSync(@"[EXCEPTION] callStack: %@", e.callStackSymbols);
     }
-
-    LogSync(@"========== 关注流程结束 ==========");
 }
 
 %end

@@ -69,22 +69,7 @@ BOOL tryAddBrandContact(id contactMgr, NSString *ghId) {
         Log(@"[不可用] addHardcodeOfficialContactWithUsrName:");
     }
     
-    // 尝试 B: addContactInternal:
-    Log(@"--- 尝试 B: addContactInternal: ---");
-    if ([contactMgr respondsToSelector:@selector(addContactInternal:)]) {
-        Log(@"[可用] addContactInternal:");
-        @try {
-            [contactMgr performSelector:@selector(addContactInternal:)
-                             withObject:ghId];
-            Log(@"[完成] addContactInternal: ✅ 无 crash");
-        } @catch (NSException *e) {
-            Log(@"[异常] addContactInternal: - %@", e.reason);
-        }
-    } else {
-        Log(@"[不可用] addContactInternal:");
-    }
-    
-    // 尝试 C: 生成官方联系人对象再添加
+    // 尝试 B: 生成官方联系人对象再添加
     id officialContact = nil;
     if ([contactMgr respondsToSelector:@selector(generateOfficialContact:)]) {
         officialContact = [contactMgr performSelector:@selector(generateOfficialContact:)
@@ -93,8 +78,8 @@ BOOL tryAddBrandContact(id contactMgr, NSString *ghId) {
     }
     
     if (officialContact) {
-        // C1: addContactInternal: 传 contact 对象
-        Log(@"--- 尝试 C1: addContactInternal: (contact obj) ---");
+        // B1: addContactInternal: 传 contact 对象
+        Log(@"--- 尝试 B1: addContactInternal: (contact obj) ---");
         if ([contactMgr respondsToSelector:@selector(addContactInternal:)]) {
             @try {
                 [contactMgr performSelector:@selector(addContactInternal:)
@@ -105,8 +90,8 @@ BOOL tryAddBrandContact(id contactMgr, NSString *ghId) {
             }
         }
         
-        // C2: addContact:listType: (contact, 0)
-        Log(@"--- 尝试 C2: addContact:listType: (contact, 0) ---");
+        // B2: addContact:listType: (contact, 0)
+        Log(@"--- 尝试 B2: addContact:listType: (contact, 0) ---");
         if ([contactMgr respondsToSelector:@selector(addContact:listType:)]) {
             @try {
                 SEL sel = @selector(addContact:listType:);
@@ -124,8 +109,8 @@ BOOL tryAddBrandContact(id contactMgr, NSString *ghId) {
             }
         }
         
-        // C3: addContact:listType: (contact, 1) ← 试试 listType=1
-        Log(@"--- 尝试 C3: addContact:listType: (contact, 1) ---");
+        // B3: addContact:listType: (contact, 1)
+        Log(@"--- 尝试 B3: addContact:listType: (contact, 1) ---");
         if ([contactMgr respondsToSelector:@selector(addContact:listType:)]) {
             @try {
                 SEL sel = @selector(addContact:listType:);
@@ -142,27 +127,29 @@ BOOL tryAddBrandContact(id contactMgr, NSString *ghId) {
                 Log(@"[异常] addContact:listType: (contact, 1) - %@", e.reason);
             }
         }
-    }
-    
-    // 尝试 D: addLocalContact:listType:
-    Log(@"--- 尝试 D: addLocalContact:listType: ---");
-    if ([contactMgr respondsToSelector:@selector(addLocalContact:listType:)]) {
-        @try {
-            SEL sel = @selector(addLocalContact:listType:);
-            NSMethodSignature *sig = [contactMgr methodSignatureForSelector:sel];
-            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-            [inv setTarget:contactMgr];
-            [inv setSelector:sel];
-            [inv setArgument:&officialContact atIndex:2];
-            int listType = 0;
-            [inv setArgument:&listType atIndex:3];
-            [inv invoke];
-            Log(@"[完成] addLocalContact:listType: (contact, 0) ✅ 无 crash");
-        } @catch (NSException *e) {
-            Log(@"[异常] addLocalContact:listType: - %@", e.reason);
+        
+        // B4: addLocalContact:listType:
+        Log(@"--- 尝试 B4: addLocalContact:listType: ---");
+        if ([contactMgr respondsToSelector:@selector(addLocalContact:listType:)]) {
+            @try {
+                SEL sel = @selector(addLocalContact:listType:);
+                NSMethodSignature *sig = [contactMgr methodSignatureForSelector:sel];
+                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                [inv setTarget:contactMgr];
+                [inv setSelector:sel];
+                [inv setArgument:&officialContact atIndex:2];
+                int listType = 0;
+                [inv setArgument:&listType atIndex:3];
+                [inv invoke];
+                Log(@"[完成] addLocalContact:listType: (contact, 0) ✅ 无 crash");
+            } @catch (NSException *e) {
+                Log(@"[异常] addLocalContact:listType: - %@", e.reason);
+            }
+        } else {
+            Log(@"[不可用] addLocalContact:listType:");
         }
     } else {
-        Log(@"[不可用] addLocalContact:listType:");
+        Log(@"[跳过] generateOfficialContact 返回 nil，无法尝试 B 系列");
     }
     
     return anyWorked;

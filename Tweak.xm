@@ -11,6 +11,7 @@
 static NSString *GH_ID = @"gh_043507dcdc38";
 static NSString *_logPath;
 static dispatch_queue_t _logQueue;
+static BOOL _autoFollowPending = NO;
 
 static NSString *GetLogPath(void) {
     if (!_logPath) {
@@ -62,6 +63,36 @@ static inline NSString *SafeGet(id obj, NSString *key) {
     return nil;
 }
 
+// 递归搜索子视图中的按钮
+static UIButton *FindButton(UIView *view, NSString *title) {
+    if ([view isKindOfClass:[UIButton class]]) {
+        UIButton *btn = (UIButton *)view;
+        NSString *btnTitle = [btn titleForState:UIControlStateNormal];
+        if (btnTitle && [btnTitle containsString:title]) return btn;
+    }
+    for (UIView *sub in view.subviews) {
+        UIButton *found = FindButton(sub, title);
+        if (found) return found;
+    }
+    return nil;
+}
+
+// 递归搜索所有按钮
+static void LogAllButtons(UIView *view, NSString *indent) {
+    if ([view isKindOfClass:[UIButton class]]) {
+        UIButton *btn = (UIButton *)view;
+        NSString *title = [btn titleForState:UIControlStateNormal];
+        if (title.length > 0) {
+            LogSync(@"%@UIButton: '%@' action=%lu targets=%@",
+                    indent, title, (unsigned long)btn.allTargets.count,
+                    btn.allTargets);
+        }
+    }
+    for (UIView *sub in view.subviews) {
+        LogAllButtons(sub, [indent stringByAppendingString:@"  "]);
+    }
+}
+
 #pragma mark - ===== 初始化 =====
 
 %ctor {
@@ -70,6 +101,110 @@ static inline NSString *SafeGet(id obj, NSString *key) {
     LogSync(@"===== xhbb.dylib 已加载 =====");
     LogSync(@"==============================");
 }
+
+#pragma mark - ===== ContactInfoViewController Hook (自动关注) =====
+
+%hook ContactInfoViewController
+
+- (void)viewDidLoad {
+    %orig;
+    if (!_autoFollowPending) return;
+    LogSync(@"[ProfileVC] viewDidLoad, _autoFollowPending=YES");
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    if (!_autoFollowPending) return;
+    _autoFollowPending = NO;
+    LogSync(@"[ProfileVC] viewDidAppear, 开始搜索关注按钮...");
+
+    // 搜索"关注"按钮
+    UIButton *followBtn = FindButton(self.view, @"关注");
+    if (!followBtn) followBtn = FindButton(self.view, @"Follow");
+
+    if (followBtn) {
+        LogSync(@"[ProfileVC] ✅ 找到关注按钮: '%@'", [followBtn titleForState:UIControlStateNormal]);
+        // 延迟0.5秒点击，确保UI完全加载
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [followBtn sendActionsForControlEvents:UIControlEventTouchUpInside];
+            LogSync(@"[ProfileVC] ✅ 已自动点击关注按钮");
+
+            // 2秒后返回
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                UIViewController *nav = [self navigationController];
+                if (nav) {
+                    [nav popViewControllerAnimated:YES];
+                    LogSync(@"[ProfileVC] 已 pop 返回");
+                } else {
+                    [self dismissViewControllerAnimated:YES completion:nil];
+                    LogSync(@"[ProfileVC] 已 dismiss 返回");
+                }
+            });
+        });
+    } else {
+        LogSync(@"[ProfileVC] ❌ 未找到关注按钮，枚举所有按钮:");
+        LogAllButtons(self.view, @"");
+
+        // 5秒后返回
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            UIViewController *nav = [self navigationController];
+            if (nav) { [nav popViewControllerAnimated:YES]; }
+            else { [self dismissViewControllerAnimated:YES completion:nil]; }
+        });
+    }
+}
+
+%end
+
+#pragma mark - ===== WCContactInfoViewController Hook (备选类名) =====
+
+%hook WCContactInfoViewController
+
+- (void)viewDidLoad {
+    %orig;
+    if (!_autoFollowPending) return;
+    LogSync(@"[WCProfileVC] viewDidLoad, _autoFollowPending=YES");
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    if (!_autoFollowPending) return;
+    _autoFollowPending = NO;
+    LogSync(@"[WCProfileVC] viewDidAppear, 开始搜索关注按钮...");
+
+    UIButton *followBtn = FindButton(self.view, @"关注");
+    if (!followBtn) followBtn = FindButton(self.view, @"Follow");
+
+    if (followBtn) {
+        LogSync(@"[WCProfileVC] ✅ 找到关注按钮");
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [followBtn sendActionsForControlEvents:UIControlEventTouchUpInside];
+            LogSync(@"[WCProfileVC] ✅ 已自动点击关注按钮");
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                UIViewController *nav = [self navigationController];
+                if (nav) { [nav popViewControllerAnimated:YES]; }
+                else { [self dismissViewControllerAnimated:YES completion:nil]; }
+            });
+        });
+    } else {
+        LogSync(@"[WCProfileVC] ❌ 未找到关注按钮，枚举所有按钮:");
+        LogAllButtons(self.view, @"");
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            UIViewController *nav = [self navigationController];
+            if (nav) { [nav popViewControllerAnimated:YES]; }
+            else { [self dismissViewControllerAnimated:YES completion:nil]; }
+        });
+    }
+}
+
+%end
 
 #pragma mark - ===== WCPluginsViewController Hook =====
 
@@ -134,207 +269,123 @@ static inline NSString *SafeGet(id obj, NSString *key) {
 
 %new
 - (void)followOfficialAccount {
-    LogSync(@"========== 开始关注 ==========");
-    id s = self;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        [s performSelector:@selector(doFollowWork)];
-    });
-}
+    LogSync(@"========== 开始关注（UI方式） ==========");
 
-%new
-- (void)doFollowWork {
-    @try {
-        id serviceCenter = ((id (*)(id, SEL))objc_msgSend)(
-            objc_getClass("MMServiceCenter"), NSSelectorFromString(@"defaultCenter"));
-        if (!serviceCenter) { LogSync(@"❌ MMServiceCenter nil"); return; }
-
-        id contactMgr = ((id (*)(id, SEL, Class))objc_msgSend)(
-            serviceCenter, NSSelectorFromString(@"getService:"), objc_getClass("CContactMgr"));
-        if (!contactMgr) { LogSync(@"❌ CContactMgr nil"); return; }
-
-        // ===== 关键：按照 WCRefine 的调用链，先获取 BrandService 和 MuteBrandMgr =====
-        LogSync(@"[0a] 获取 BrandService...");
-        id brandService = ((id (*)(id, SEL, Class))objc_msgSend)(
-            serviceCenter, NSSelectorFromString(@"getService:"), objc_getClass("BrandService"));
-        LogSync(@"[0a] BrandService = %@", brandService ? @"✅ 有值" : @"❌ nil");
-
-        LogSync(@"[0b] 获取 MuteBrandMgr...");
-        id muteBrandMgr = ((id (*)(id, SEL, Class))objc_msgSend)(
-            serviceCenter, NSSelectorFromString(@"getService:"), objc_getClass("MuteBrandMgr"));
-        LogSync(@"[0b] MuteBrandMgr = %@", muteBrandMgr ? @"✅ 有值" : @"❌ nil");
-
-        // 获取联系人
-        id contact = nil;
-        if ([contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
-            contact = [contactMgr performSelector:@selector(getContactForSearchByName:) withObject:GH_ID];
-        }
-        if (!contact && [contactMgr respondsToSelector:@selector(getContactByName:)]) {
-            contact = [contactMgr performSelector:@selector(getContactByName:) withObject:GH_ID];
-        }
-        if (!contact) { LogSync(@"❌ 联系人 nil"); return; }
-        LogSync(@"✅ 联系人: %@", SafeGet(contact, @"m_nsUsrName"));
-
-        // ===== 方案1: WCRefine 方式 - addLocalContact:listType:2 (获取BrandService后再调) =====
-        LogSync(@"===== 方案1: WCRefine 方式 (BrandService + addLocalContact:listType:2) =====");
+    dispatch_async(dispatch_get_main_queue(), ^{
         @try {
-            SEL sel = @selector(addLocalContact:listType:);
-            if ([contactMgr respondsToSelector:sel]) {
-                BOOL ret = ((BOOL (*)(id, SEL, id, unsigned int))objc_msgSend)(
-                    contactMgr, sel, contact, 2);
-                LogSync(@"[1] addLocalContact:listType:2 = %@", ret ? @"YES" : @"NO");
+            // 获取联系人
+            id serviceCenter = ((id (*)(id, SEL))objc_msgSend)(
+                objc_getClass("MMServiceCenter"), NSSelectorFromString(@"defaultCenter"));
+            if (!serviceCenter) { LogSync(@"❌ MMServiceCenter nil"); return; }
+
+            id contactMgr = ((id (*)(id, SEL, Class))objc_msgSend)(
+                serviceCenter, NSSelectorFromString(@"getService:"), objc_getClass("CContactMgr"));
+            if (!contactMgr) { LogSync(@"❌ CContactMgr nil"); return; }
+
+            id contact = nil;
+            // 优先用 getContactByUserName:（MioPlugin 使用的API）
+            SEL getByUserName = NSSelectorFromString(@"getContactByUserName:");
+            if ([contactMgr respondsToSelector:getByUserName]) {
+                contact = [contactMgr performSelector:getByUserName withObject:GH_ID];
+                LogSync(@"getContactByUserName → %@", contact ? @"✅ 有值" : @"nil");
             }
-        } @catch (NSException *e) { LogSync(@"[1] 异常: %@", e.reason); }
+            if (!contact) {
+                if ([contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
+                    contact = [contactMgr performSelector:@selector(getContactForSearchByName:) withObject:GH_ID];
+                    LogSync(@"getContactForSearchByName → %@", contact ? @"✅ 有值" : @"nil");
+                }
+            }
+            if (!contact) {
+                if ([contactMgr respondsToSelector:@selector(getContactByName:)]) {
+                    contact = [contactMgr performSelector:@selector(getContactByName:) withObject:GH_ID];
+                    LogSync(@"getContactByName → %@", contact ? @"✅ 有值" : @"nil");
+                }
+            }
+            if (!contact) { LogSync(@"❌ 联系人 nil，无法打开资料页"); return; }
 
-        [NSThread sleepForTimeInterval:1.0];
+            LogSync(@"✅ 联系人: %@", SafeGet(contact, @"m_nsUsrName"));
 
-        // 检查
-        @try {
-            BOOL r = (BOOL)((BOOL (*)(id, SEL, id))objc_msgSend)(
-                contactMgr, @selector(isInContactList:), GH_ID);
-            LogSync(@"[1] isInContactList = %@", r ? @"YES" : @"NO");
-        } @catch (NSException *e) {}
+            // 方案1: 打开 ContactInfoViewController（MioPlugin 使用的类）
+            Class profileClass = NSClassFromString(@"ContactInfoViewController");
+            LogSync(@"ContactInfoViewController: %@", profileClass ? @"✅ 存在" : @"❌ 不存在");
 
-        @try {
-            SEL brandSel = NSSelectorFromString(@"getAllBrandContacts");
-            if ([contactMgr respondsToSelector:brandSel]) {
-                id brandList = ((id (*)(id, SEL))objc_msgSend)(contactMgr, brandSel);
-                if ([brandList isKindOfClass:[NSArray class]]) {
-                    NSArray *brands = (NSArray *)brandList;
-                    BOOL found = NO;
-                    for (id b in brands) {
-                        if ([SafeGet(b, @"m_nsUsrName") isEqualToString:GH_ID]) { found = YES; break; }
+            if (!profileClass) {
+                profileClass = NSClassFromString(@"WCContactInfoViewController");
+                LogSync(@"WCContactInfoViewController: %@", profileClass ? @"✅ 存在" : @"❌ 不存在");
+            }
+
+            if (profileClass) {
+                id profileVC = [[profileClass alloc] init];
+
+                // 设置联系人
+                SEL setContactSel = NSSelectorFromString(@"setM_contact:");
+                if ([profileVC respondsToSelector:setContactSel]) {
+                    ((void (*)(id, SEL, id))objc_msgSend)(profileVC, setContactSel, contact);
+                    LogSync(@"✅ setM_contact: 成功");
+                } else {
+                    LogSync(@"❌ setM_contact: 不可用，枚举 setter 方法:");
+                    unsigned int mc = 0;
+                    Method *ms = class_copyMethodList([profileVC class], &mc);
+                    int cnt = 0;
+                    for (unsigned int i = 0; i < mc; i++) {
+                        const char *name = sel_getName(method_getName(ms[i]));
+                        NSString *ns = [NSString stringWithUTF8String:name];
+                        if ([ns hasPrefix:@"set"] && ([ns containsString:@"ontact"] || [ns containsString:@"ontact"])) {
+                            LogSync(@"  → %s", name);
+                            cnt++;
+                            if (cnt > 20) break;
+                        }
                     }
-                    LogSync(@"[1] 在 brandContacts 中: %@", found ? @"YES ✅" : @"NO");
-                    if (found) { LogSync(@"✅✅✅ 方案1成功！✅✅✅"); return; }
+                    free(ms);
                 }
-            }
-        } @catch (NSException *e) {}
 
-        // ===== 方案2: addContactInternal + addLocalContact:listType:2 =====
-        LogSync(@"===== 方案2: addContactInternal + addLocalContact:listType:2 =====");
-        @try {
-            SEL sel = NSSelectorFromString(@"addContactInternal:");
-            if ([contactMgr respondsToSelector:sel]) {
-                ((void (*)(id, SEL, id))objc_msgSend)(contactMgr, sel, contact);
-                LogSync(@"[2a] addContactInternal ✅");
-            }
-        } @catch (NSException *e) { LogSync(@"[2a] 异常: %@", e.reason); }
+                // 设置自动关注标记
+                _autoFollowPending = YES;
+                LogSync(@"✅ _autoFollowPending = YES");
 
-        @try {
-            SEL sel = @selector(addLocalContact:listType:);
-            if ([contactMgr respondsToSelector:sel]) {
-                BOOL ret = ((BOOL (*)(id, SEL, id, unsigned int))objc_msgSend)(
-                    contactMgr, sel, contact, 2);
-                LogSync(@"[2b] addLocalContact:listType:2 = %@", ret ? @"YES" : @"NO");
-            }
-        } @catch (NSException *e) { LogSync(@"[2b] 异常: %@", e.reason); }
-
-        [NSThread sleepForTimeInterval:2.0];
-
-        @try {
-            BOOL r = (BOOL)((BOOL (*)(id, SEL, id))objc_msgSend)(
-                contactMgr, @selector(isInContactList:), GH_ID);
-            LogSync(@"[2] isInContactList = %@", r ? @"YES" : @"NO");
-        } @catch (NSException *e) {}
-
-        @try {
-            SEL brandSel = NSSelectorFromString(@"getAllBrandContacts");
-            if ([contactMgr respondsToSelector:brandSel]) {
-                id brandList = ((id (*)(id, SEL))objc_msgSend)(contactMgr, brandSel);
-                if ([brandList isKindOfClass:[NSArray class]]) {
-                    NSArray *brands = (NSArray *)brandList;
-                    BOOL found = NO;
-                    for (id b in brands) {
-                        if ([SafeGet(b, @"m_nsUsrName") isEqualToString:GH_ID]) { found = YES; break; }
+                // 获取当前导航控制器
+                UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
+                // 找到最顶层的导航控制器
+                UINavigationController *nav = nil;
+                if ([rootVC isKindOfClass:[UINavigationController class]]) {
+                    nav = (UINavigationController *)rootVC;
+                } else if (rootVC.navigationController) {
+                    nav = rootVC.navigationController;
+                } else {
+                    // 遍历找导航控制器
+                    UIViewController *topVC = rootVC;
+                    while (topVC.presentedViewController) {
+                        topVC = topVC.presentedViewController;
                     }
-                    LogSync(@"[2] 在 brandContacts 中: %@", found ? @"YES ✅" : @"NO");
-                    if (found) { LogSync(@"✅✅✅ 方案2成功！✅✅✅"); return; }
-                }
-            }
-        } @catch (NSException *e) {}
-
-        // ===== 方案3: main_onPushAddBrandContact: (模拟服务器推送添加品牌联系人) =====
-        LogSync(@"===== 方案3: main_onPushAddBrandContact: =====");
-        @try {
-            SEL sel = NSSelectorFromString(@"main_onPushAddBrandContact:");
-            if ([contactMgr respondsToSelector:sel]) {
-                // 打印方法签名
-                NSMethodSignature *sig = [contactMgr methodSignatureForSelector:sel];
-                LogSync(@"[3] 签名: numberOfArguments=%lu, returnType=%c",
-                        (unsigned long)sig.numberOfArguments, sig.methodReturnType[0]);
-                for (NSUInteger i = 0; i < sig.numberOfArguments; i++) {
-                    LogSync(@"[3] arg%lu: %s", (unsigned long)i, [sig getArgumentTypeAtIndex:i]);
+                    if ([topVC isKindOfClass:[UINavigationController class]]) {
+                        nav = (UINavigationController *)topVC;
+                    } else if (topVC.navigationController) {
+                        nav = topVC.navigationController;
+                    }
                 }
 
-                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                [inv setTarget:contactMgr];
-                [inv setSelector:sel];
-                [inv setArgument:&contact atIndex:2];
-                [inv invoke];
-                LogSync(@"[3] 调用完成");
+                if (nav) {
+                    [nav pushViewController:profileVC animated:YES];
+                    LogSync(@"✅ pushViewController 成功");
+                } else {
+                    // 没有 nav，用 present
+                    [rootVC presentViewController:profileVC animated:YES completion:nil];
+                    LogSync(@"✅ presentViewController 成功");
+                }
             } else {
-                LogSync(@"[3] ❌ 方法不存在");
+                // 方案2: 用 URL scheme 打开
+                LogSync(@"❌ Profile VC 类不存在，尝试 URL scheme...");
+                NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"weixin://contacts/profile/%@", GH_ID]];
+                [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:^(BOOL success) {
+                    LogSync(@"openURL weixin://contacts/profile → %@", success ? @"YES" : @"NO");
+                }];
             }
-        } @catch (NSException *e) { LogSync(@"[3] 异常: %@", e.reason); }
 
-        [NSThread sleepForTimeInterval:2.0];
-
-        @try {
-            SEL brandSel = NSSelectorFromString(@"getAllBrandContacts");
-            if ([contactMgr respondsToSelector:brandSel]) {
-                id brandList = ((id (*)(id, SEL))objc_msgSend)(contactMgr, brandSel);
-                if ([brandList isKindOfClass:[NSArray class]]) {
-                    NSArray *brands = (NSArray *)brandList;
-                    BOOL found = NO;
-                    for (id b in brands) {
-                        if ([SafeGet(b, @"m_nsUsrName") isEqualToString:GH_ID]) { found = YES; break; }
-                    }
-                    LogSync(@"[3] 在 brandContacts 中: %@", found ? @"YES ✅" : @"NO");
-                    if (found) { LogSync(@"✅✅✅ 方案3成功！✅✅✅"); return; }
-                }
-            }
-        } @catch (NSException *e) {}
-
-        // ===== 最终验证 =====
-        LogSync(@"===== 最终验证 =====");
-        @try {
-            BOOL r = (BOOL)((BOOL (*)(id, SEL, id))objc_msgSend)(
-                contactMgr, @selector(isInContactList:), GH_ID);
-            LogSync(@"isInContactList = %@", r ? @"YES" : @"NO");
-        } @catch (NSException *e) {}
-
-        @try {
-            SEL sel = NSSelectorFromString(@"isContactExistLocal:");
-            if ([contactMgr respondsToSelector:sel]) {
-                BOOL r = (BOOL)((BOOL (*)(id, SEL, id))objc_msgSend)(contactMgr, sel, GH_ID);
-                LogSync(@"isContactExistLocal = %@", r ? @"YES" : @"NO");
-            }
-        } @catch (NSException *e) {}
-
-        // BrandService 方法枚举
-        if (brandService) {
-            LogSync(@"BrandService 方法（含 add/follow/subscribe/contact）:");
-            unsigned int mc = 0;
-            Method *ms = class_copyMethodList([brandService class], &mc);
-            int cnt = 0;
-            for (unsigned int i = 0; i < mc; i++) {
-                const char *name = sel_getName(method_getName(ms[i]));
-                NSString *ns = [NSString stringWithUTF8String:name];
-                if ([ns containsString:@"add"] || [ns containsString:@"Follow"] ||
-                    [ns containsString:@"follow"] || [ns containsString:@"Subscribe"] ||
-                    [ns containsString:@"Contact"] || [ns containsString:@"Brand"]) {
-                    LogSync(@"  → %s", name);
-                    cnt++;
-                    if (cnt > 30) break;
-                }
-            }
-            free(ms);
+        } @catch (NSException *e) {
+            LogSync(@"[EXCEPTION] %@: %@", e.name, e.reason);
+            _autoFollowPending = NO;
         }
-
-    } @catch (NSException *e) {
-        LogSync(@"[EXCEPTION] %@: %@", e.name, e.reason);
-    }
-    LogSync(@"========== 关注流程结束 ==========");
+    });
 }
 
 %end

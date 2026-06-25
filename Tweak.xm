@@ -8,9 +8,16 @@
 
 #pragma mark - ===== 异步日志系统 =====
 
-#define WCRefineLogPath @"/var/mobile/Documents/wcrefine_monitor.log"
-
+static NSString *_logPath;
 static dispatch_queue_t _logQueue;
+
+static NSString *GetLogPath(void) {
+    if (!_logPath) {
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        _logPath = [[paths firstObject] stringByAppendingPathComponent:@"wcrefine_monitor.log"];
+    }
+    return _logPath;
+}
 
 void WCRefineLog(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
 void WCRefineLogStack(void);
@@ -30,9 +37,9 @@ void WCRefineLog(NSString *format, ...) {
         _logQueue = dispatch_queue_create("com.xhbb.logqueue", DISPATCH_QUEUE_SERIAL);
     }
     dispatch_async(_logQueue, ^{
-        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:WCRefineLogPath];
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:GetLogPath()];
         if (!fh) {
-            [logLine writeToFile:WCRefineLogPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            [logLine writeToFile:GetLogPath() atomically:YES encoding:NSUTF8StringEncoding error:nil];
         } else {
             [fh seekToEndOfFile];
             [fh writeData:[logLine dataUsingEncoding:NSUTF8StringEncoding]];
@@ -58,6 +65,7 @@ void WCRefineLogStack(void) {
     
     WCRefineLog(@"==============================");
     WCRefineLog(@"===== xhbb 监控 dylib 已加载 =====");
+    WCRefineLog(@"日志路径: %@", GetLogPath());
     WCRefineLog(@"==============================");
     
     Class wcRefineHelper = NSClassFromString(@"WCRefineHelper");

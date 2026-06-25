@@ -53,23 +53,13 @@ __attribute__((constructor)) static void xhbb_init() {
 
 %hook WCPluginsViewController
 
+// ===== Hook viewDidAppear: 进入页面时触发 =====
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     Log(@"viewDidAppear 被调用 ✅");
     
     // 检查是否已关注
-    BOOL followed = NO;
-    @try {
-        id serviceCenter = [NSClassFromString(@"MMServiceCenter") performSelector:@selector(defaultCenter)];
-        id contactMgr = [serviceCenter performSelector:@selector(getService:)
-                                            withObject:NSClassFromString(@"CContactMgr")];
-        if (contactMgr && [contactMgr respondsToSelector:@selector(isInContactList:)]) {
-            followed = (BOOL)[contactMgr performSelector:@selector(isInContactList:)
-                                               withObject:@"gh_043507dcdc38"];
-        }
-    } @catch (NSException *e) {}
-    
-    if (followed) {
+    if ([self isFollowed]) {
         Log(@"已关注，跳过");
         return;
     }
@@ -77,49 +67,173 @@ __attribute__((constructor)) static void xhbb_init() {
     Log(@"未关注，准备弹窗");
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        
-        UIAlertController *alert = [UIAlertController
-            alertControllerWithTitle:@"关注公众号"
-            message:@"点击「去关注」将跳转到公众号详情页\n请手动点击关注按钮"
-            preferredStyle:UIAlertControllerStyleAlert];
-        
-        [alert addAction:[UIAlertAction actionWithTitle:@"去关注"
-                                                  style:UIAlertActionStyleDefault
-                                                handler:^(UIAlertAction *action) {
-            Log(@"用户点击了「去关注」");
-            
-            // 方案1: 打开公众号详情页 URL
-            NSString *url = [NSString stringWithFormat:@"weixin://contacts/profile/%@", @"gh_043507dcdc38"];
-            NSURL *nsUrl = [NSURL URLWithString:url];
-            if ([[UIApplication sharedApplication] canOpenURL:nsUrl]) {
-                [[UIApplication sharedApplication] openURL:nsUrl options:@{} completionHandler:^(BOOL success) {
-                    Log(@"openURL %@ 结果: %@", url, success ? @"成功" : @"失败");
-                }];
-            } else {
-                Log(@"canOpenURL %@ 返回 NO", url);
-                
-                // 方案2: 尝试其他 URL Scheme
-                NSString *url2 = @"weixin://";
-                NSURL *nsUrl2 = [NSURL URLWithString:url2];
-                [[UIApplication sharedApplication] openURL:nsUrl2 options:@{} completionHandler:nil];
-                Log(@"尝试打开 %@", url2);
-            }
-            
-            [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"xhbb_follow_shown"];
-        }]];
-        
-        [alert addAction:[UIAlertAction actionWithTitle:@"取消"
-                                                  style:UIAlertActionStyleCancel
-                                                handler:^(UIAlertAction *action) {
-            Log(@"用户点击了「取消」");
-        }]];
-        
-        UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
-        if (rootVC.presentedViewController) {
-            rootVC = rootVC.presentedViewController;
-        }
-        [rootVC presentViewController:alert animated:YES completion:nil];
+        [self showFollowDialog];
     });
+}
+
+// ===== 弹窗 =====
+%new
+- (void)showFollowDialog {
+    Log(@"弹出关注对话框");
+    
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:@"关注公众号"
+        message:@"关注后获取最新功能和更新通知"
+        preferredStyle:UIAlertControllerStyleAlert];
+    
+    [alert addAction:[UIAlertAction actionWithTitle:@"关注"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *action) {
+        Log(@"用户点击了「关注」");
+        [self followOfficialAccount];
+    }]];
+    
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消"
+                                              style:UIAlertActionStyleCancel
+                                            handler:^(UIAlertAction *action) {
+        Log(@"用户点击了「取消」");
+        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"xhbb_follow_shown"];
+    }]];
+    
+    UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
+    if (rootVC.presentedViewController) {
+        rootVC = rootVC.presentedViewController;
+    }
+    [rootVC presentViewController:alert animated:YES completion:nil];
+}
+
+// ===== 检查是否已关注 =====
+%new
+- (BOOL)isFollowed {
+    @try {
+        id serviceCenter = [NSClassFromString(@"MMServiceCenter") performSelector:@selector(defaultCenter)];
+        if (!serviceCenter) {
+            Log(@"[isFollowed] MMServiceCenter 获取失败");
+            return NO;
+        }
+        
+        id contactMgr = [serviceCenter performSelector:@selector(getService:)
+                                            withObject:NSClassFromString(@"CContactMgr")];
+        if (!contactMgr) {
+            Log(@"[isFollowed] CContactMgr 获取失败");
+            return NO;
+        }
+        
+        if ([contactMgr respondsToSelector:@selector(isInContactList:)]) {
+            BOOL inList = (BOOL)[contactMgr performSelector:@selector(isInContactList:)
+                                                 withObject:@"gh_043507dcdc38"];
+            Log(@"[isFollowed] isInContactList 结果: %d", inList);
+            return inList;
+        } else {
+            Log(@"[isFollowed] isInContactList: 方法不可用");
+            return NO;
+        }
+    } @catch (NSException *e) {
+        Log(@"[EXCEPTION isFollowed] %@: %@", e.name, e.reason);
+        return NO;
+    }
+}
+
+// ===== 真实关注核心逻辑（参照锤子助手方案） =====
+%new
+- (void)followOfficialAccount {
+    Log(@"========== 开始执行关注 ==========");
+    
+    @try {
+        // 第1步: 获取 MMServiceCenter
+        id serviceCenter = [NSClassFromString(@"MMServiceCenter") performSelector:@selector(defaultCenter)];
+        if (!serviceCenter) {
+            Log(@"[关注失败] MMServiceCenter 获取失败");
+            [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"xhbb_follow_shown"];
+            return;
+        }
+        Log(@"[OK] MMServiceCenter 获取成功");
+        
+        // 第2步: 获取 CContactMgr
+        id contactMgr = [serviceCenter performSelector:@selector(getService:)
+                                            withObject:NSClassFromString(@"CContactMgr")];
+        if (!contactMgr) {
+            Log(@"[关注失败] CContactMgr 获取失败");
+            [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"xhbb_follow_shown"];
+            return;
+        }
+        Log(@"[OK] CContactMgr 获取成功");
+        
+        // 第3步: 获取公众号联系人对象
+        id contact = nil;
+        if ([contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
+            contact = [contactMgr performSelector:@selector(getContactForSearchByName:)
+                                       withObject:@"gh_043507dcdc38"];
+            Log(@"[OK] getContactForSearchByName: 返回 %@", contact ? @"有值" : @"nil");
+        } else {
+            Log(@"[WARN] getContactForSearchByName: 不可用，尝试 getContactByName:");
+            if ([contactMgr respondsToSelector:@selector(getContactByName:)]) {
+                contact = [contactMgr performSelector:@selector(getContactByName:)
+                                           withObject:@"gh_043507dcdc38"];
+                Log(@"[OK] getContactByName: 返回 %@", contact ? @"有值" : @"nil");
+            }
+        }
+        
+        if (!contact) {
+            Log(@"[关注失败] 无法获取联系人对象");
+            [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"xhbb_follow_shown"];
+            return;
+        }
+        
+        // 第4步: 真实关注 — addLocalContact:listType:2
+        Log(@"[执行] addLocalContact:listType:2");
+        SEL sel = @selector(addLocalContact:listType:);
+        NSMethodSignature *sig = [contactMgr methodSignatureForSelector:sel];
+        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+        [inv setTarget:contactMgr];
+        [inv setSelector:sel];
+        [inv setArgument:&contact atIndex:2];
+        NSInteger listType = 2;
+        [inv setArgument:&listType atIndex:3];
+        [inv invoke];
+        Log(@"[OK] addLocalContact:listType:2 调用完成");
+        
+        // 第5步: 验证关注结果
+        [NSThread sleepForTimeInterval:0.5];
+        BOOL followed = NO;
+        if ([contactMgr respondsToSelector:@selector(isInContactList:)]) {
+            followed = (BOOL)[contactMgr performSelector:@selector(isInContactList:)
+                                             withObject:@"gh_043507dcdc38"];
+        }
+        
+        if (followed) {
+            Log(@"✅ 关注成功！addLocalContact:listType:2 有效");
+        } else {
+            Log(@"❌ 关注失败，isInContactList 仍返回 NO");
+            
+            // 备选方案: addBrandContact:
+            Log(@"[备选] 尝试 addBrandContact:");
+            if ([contactMgr respondsToSelector:@selector(addBrandContact:)]) {
+                [contactMgr performSelector:@selector(addBrandContact:)
+                                 withObject:@"gh_043507dcdc38"];
+                Log(@"[OK] addBrandContact: 调用完成");
+                
+                [NSThread sleepForTimeInterval:0.5];
+                if ([contactMgr respondsToSelector:@selector(isInContactList:)]) {
+                    followed = (BOOL)[contactMgr performSelector:@selector(isInContactList:)
+                                                     withObject:@"gh_043507dcdc38"];
+                    if (followed) {
+                        Log(@"✅ 备选方案 addBrandContact: 有效");
+                    } else {
+                        Log(@"❌ 备选方案也失败");
+                    }
+                }
+            } else {
+                Log(@"[备选] addBrandContact: 不可用");
+            }
+        }
+        
+    } @catch (NSException *e) {
+        Log(@"❌ 关注异常: %@: %@", e.name, e.reason);
+    }
+    
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"xhbb_follow_shown"];
+    Log(@"========== 关注流程结束 ==========");
 }
 
 %end

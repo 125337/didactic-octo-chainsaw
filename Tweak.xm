@@ -90,7 +90,7 @@ __attribute__((constructor)) static void xhbb_init() {
         
         if ([contactMgr respondsToSelector:@selector(isInContactList:)]) {
             return (BOOL)[contactMgr performSelector:@selector(isInContactList:)
-                                         withObject:@"gh_c6ecee578e5f"];
+                                         withObject:@"gh_043507dcdc38"];
         }
     } @catch (NSException *e) {
         Log(@"[EXCEPTION isFollowed] %@: %@", e.name, e.reason);
@@ -130,71 +130,67 @@ __attribute__((constructor)) static void xhbb_init() {
         
         [self logCandidateMethods:contactMgr];
         
-        if ([contactMgr respondsToSelector:@selector(addBrandContact:)]) {
-            @try {
-                [contactMgr performSelector:@selector(addBrandContact:)
-                                 withObject:@"gh_c6ecee578e5f"];
-                Log(@"[完成] addBrandContact:");
-            } @catch (NSException *e) {
-                Log(@"[异常] addBrandContact: - %@", e.reason);
-            }
+        // 尝试 A: addContact:listType:（confirmed available）
+        id contact = nil;
+        if ([contactMgr respondsToSelector:@selector(getContactByName:)]) {
+            contact = [contactMgr performSelector:@selector(getContactByName:)
+                                       withObject:@"gh_043507dcdc38"];
+            Log(@"[getContactByName] contact = %@", contact ? @"有值" : @"nil");
         }
         
-        if ([contactMgr respondsToSelector:@selector(addBrandContact:withScene:)]) {
+        if (contact && [contactMgr respondsToSelector:@selector(addContact:listType:)]) {
+            Log(@"[可用] addContact:listType:");
             @try {
-                SEL sel = @selector(addBrandContact:withScene:);
+                SEL sel = @selector(addContact:listType:);
                 NSMethodSignature *sig = [contactMgr methodSignatureForSelector:sel];
                 NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
                 [inv setTarget:contactMgr];
                 [inv setSelector:sel];
-                NSString *gh = @"gh_c6ecee578e5f";
-                int scene = 3;
-                [inv setArgument:&gh atIndex:2];
-                [inv setArgument:&scene atIndex:3];
+                int listType = 0;
+                [inv setArgument:&contact atIndex:2];
+                [inv setArgument:&listType atIndex:3];
                 [inv invoke];
-                Log(@"[完成] addBrandContact:withScene:");
+                Log(@"[完成] addContact:listType: 调用成功");
             } @catch (NSException *e) {
-                Log(@"[异常] addBrandContact:withScene: - %@", e.reason);
+                Log(@"[异常] addContact:listType: - %@", e.reason);
             }
+        } else {
+            Log(@"[不可用] addContact:listType: 不存在或 contact 为 nil");
         }
         
-        id contact = nil;
-        if ([contactMgr respondsToSelector:@selector(getContactByName:)]) {
-            contact = [contactMgr performSelector:@selector(getContactByName:)
-                                       withObject:@"gh_c6ecee578e5f"];
-        }
-        if (contact && [contactMgr respondsToSelector:@selector(addContact:withOpType:)]) {
+        // 尝试 B: addContactInternal:
+        if ([contactMgr respondsToSelector:@selector(addContactInternal:)]) {
+            Log(@"[可用] addContactInternal:");
             @try {
-                SEL sel2 = @selector(addContact:withOpType:);
-                NSMethodSignature *sig2 = [contactMgr methodSignatureForSelector:sel2];
-                NSInvocation *inv2 = [NSInvocation invocationWithMethodSignature:sig2];
-                [inv2 setTarget:contactMgr];
-                [inv2 setSelector:sel2];
-                int opType = 1;
-                [inv2 setArgument:&contact atIndex:2];
-                [inv2 setArgument:&opType atIndex:3];
-                [inv2 invoke];
-                Log(@"[完成] addContact:withOpType:");
+                [contactMgr performSelector:@selector(addContactInternal:)
+                                 withObject:contact ?: @"gh_043507dcdc38"];
+                Log(@"[完成] addContactInternal: 调用成功");
             } @catch (NSException *e) {
-                Log(@"[异常] addContact:withOpType: - %@", e.reason);
+                Log(@"[异常] addContactInternal: - %@", e.reason);
             }
+        } else {
+            Log(@"[不可用] addContactInternal: 不存在");
         }
         
-        if ([contactMgr respondsToSelector:@selector(followBrandContact:)]) {
+        // 尝试 C: main_onPushAddBrandContact:
+        if ([contactMgr respondsToSelector:@selector(main_onPushAddBrandContact:)]) {
+            Log(@"[可用] main_onPushAddBrandContact:");
             @try {
-                [contactMgr performSelector:@selector(followBrandContact:)
-                                 withObject:@"gh_c6ecee578e5f"];
-                Log(@"[完成] followBrandContact:");
+                [contactMgr performSelector:@selector(main_onPushAddBrandContact:)
+                                 withObject:@"gh_043507dcdc38"];
+                Log(@"[完成] main_onPushAddBrandContact: 调用成功");
             } @catch (NSException *e) {
-                Log(@"[异常] followBrandContact: - %@", e.reason);
+                Log(@"[异常] main_onPushAddBrandContact: - %@", e.reason);
             }
+        } else {
+            Log(@"[不可用] main_onPushAddBrandContact: 不存在");
         }
         
         [NSThread sleepForTimeInterval:2.0];
         BOOL followed = NO;
         if ([contactMgr respondsToSelector:@selector(isInContactList:)]) {
             followed = (BOOL)[contactMgr performSelector:@selector(isInContactList:)
-                                               withObject:@"gh_c6ecee578e5f"];
+                                               withObject:@"gh_043507dcdc38"];
         }
         Log(@"[结果] isInContactList = %d", followed);
         

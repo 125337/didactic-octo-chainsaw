@@ -69,31 +69,83 @@ void LogSync(NSString *format, ...) {
     }
 }
 
-// 打印联系人关键属性
+// 安全打印联系人关键属性（只检查已知返回对象类型的安全属性）
 static void DumpContact(id contact) {
     if (!contact) { LogSync(@"  (contact is nil)"); return; }
     LogSync(@"  class = %@", NSStringFromClass([contact class]));
 
-    // 遍历所有属性，打印值不为 null 的
-    unsigned int propCount = 0;
-    objc_property_t *props = class_copyPropertyList([contact class], &propCount);
-    int printed = 0;
-    for (unsigned int i = 0; i < propCount && printed < 50; i++) {
-        const char *propName = property_getName(props[i]);
-        NSString *pName = [NSString stringWithUTF8String:propName];
-        SEL getter = NSSelectorFromString(pName);
-        if ([contact respondsToSelector:getter]) {
-            id val = [contact performSelector:getter];
-            if (val && ![val isEqual:[NSNull null]] &&
-                !([val isKindOfClass:[NSString class]] && [val length] == 0) &&
-                !([val isKindOfClass:[NSNumber class]] && [val integerValue] == 0 && ![val boolValue])) {
-                LogSync(@"  %@ = %@", pName,
-                    [val isKindOfClass:[NSString class]] ? val : [val description]);
-                printed++;
+    // 只检查已知安全的 NSString* 属性
+    NSString *stringProps[] = {
+        @"m_nsUsrName", @"m_nsNickName", @"m_nsBrandNick",
+        @"m_nsHeadImgUrl", @"m_nsAlias", @"m_nsRemark",
+        @"m_nsVerifyInfo", @"m_nsBigHeadImgUrl", @"m_nsSmallHeadImgUrl",
+    };
+    for (int i = 0; i < 9; i++) {
+        @try {
+            SEL sel = NSSelectorFromString(stringProps[i]);
+            if ([contact respondsToSelector:sel]) {
+                id val = [contact performSelector:sel];
+                if (val && [val isKindOfClass:[NSString class]] && [(NSString *)val length] > 0) {
+                    LogSync(@"  %@ = %@", stringProps[i], val);
+                }
             }
+        } @catch (NSException *e) {
+            LogSync(@"  %@ → 异常: %@", stringProps[i], e.reason);
         }
     }
-    free(props);
+
+    // 检查已知安全的 BOOL 属性
+    NSString *boolProps[] = {
+        @"m_bIsBrandContact", @"m_bIsService", @"m_bIsChatRoom",
+    };
+    for (int i = 0; i < 3; i++) {
+        @try {
+            SEL sel = NSSelectorFromString(boolProps[i]);
+            if ([contact respondsToSelector:sel]) {
+                // 用 NSInvocation 安全获取 BOOL
+                NSMethodSignature *sig = [contact methodSignatureForSelector:sel];
+                if (sig.methodReturnType[0] == 'B' || sig.methodReturnType[0] == 'c') {
+                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                    [inv setTarget:contact];
+                    [inv setSelector:sel];
+                    [inv invoke];
+                    BOOL val = NO;
+                    [inv getReturnValue:&val];
+                    LogSync(@"  %@ = %@", boolProps[i], val ? @"YES" : @"NO");
+                }
+            }
+        } @catch (NSException *e) {
+            LogSync(@"  %@ → 异常: %@", boolProps[i], e.reason);
+        }
+    }
+
+    // 检查整数属性（用 NSInvocation 安全获取）
+    NSString *intProps[] = {
+        @"m_uiFriendScene", @"m_uiCertificationFlag",
+        @"m_uiBrandFlag", @"m_uiContactType",
+    };
+    for (int i = 0; i < 4; i++) {
+        @try {
+            SEL sel = NSSelectorFromString(intProps[i]);
+            if ([contact respondsToSelector:sel]) {
+                NSMethodSignature *sig = [contact methodSignatureForSelector:sel];
+                char rt = sig.methodReturnType[0];
+                if (rt == 'I' || rt == 'i' || rt == 'L' || rt == 'l' || rt == 'Q' || rt == 'q') {
+                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                    [inv setTarget:contact];
+                    [inv setSelector:sel];
+                    [inv invoke];
+                    unsigned int val = 0;
+                    [inv getReturnValue:&val];
+                    if (val != 0) {
+                        LogSync(@"  %@ = %u", intProps[i], val);
+                    }
+                }
+            }
+        } @catch (NSException *e) {
+            LogSync(@"  %@ → 异常: %@", intProps[i], e.reason);
+        }
+    }
 }
 
 #pragma mark - ===== 初始化 =====

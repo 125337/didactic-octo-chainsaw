@@ -1,3 +1,7 @@
+#import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+
+
 #pragma mark - ===== 日志系统 =====
 
 // 日志文件路径：/var/mobile/Documents/xhbb_follow.log
@@ -26,23 +30,6 @@ void Log(NSString *format, ...) {
         [fh seekToEndOfFile];
         [fh writeData:[logLine dataUsingEncoding:NSUTF8StringEncoding]];
         [fh closeFile];
-    }
-}
-
-
-#pragma mark - ===== dylib 加载入口 =====
-
-%ctor {
-    Log(@"==============================");
-    Log(@"===== xhbb.dylib 已加载 =====");
-    Log(@"==============================");
-    
-    // 确认目标类存在
-    Class cls = NSClassFromString(@"WCPluginsViewController");
-    if (cls) {
-        Log(@"[OK] 找到 WCPluginsViewController 类");
-    } else {
-        Log(@"[ERROR] WCPluginsViewController 类不存在！检查 Filter 是否正确");
     }
 }
 

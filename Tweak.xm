@@ -74,9 +74,6 @@ __attribute__((constructor)) static void xhbb_init() {
         free(methods);
         
         // 检查 isInContactList: 返回类型
-        Method m = NULL;
-        if (count > 0) m = methods[0]; // placeholder, we freed it already
-        // Re-get method for isInContactList:
         Method isInContactMethod = class_getInstanceMethod([contactMgr class], @selector(isInContactList:));
         if (isInContactMethod) {
             const char *returnType = method_copyReturnType(isInContactMethod);

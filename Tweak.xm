@@ -76,9 +76,10 @@ __attribute__((constructor)) static void xhbb_init() {
     }
     
     Log(@"未关注，准备弹窗");
+    id weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        [self performSelector:@selector(showFollowDialog)];
+        [weakSelf performSelector:@selector(showFollowDialog)];
     });
 }
 
@@ -86,6 +87,8 @@ __attribute__((constructor)) static void xhbb_init() {
 %new
 - (void)showFollowDialog {
     Log(@"弹出关注对话框");
+    
+    id weakSelf = self;
     
     UIAlertController *alert = [UIAlertController
         alertControllerWithTitle:@"关注公众号"
@@ -96,7 +99,7 @@ __attribute__((constructor)) static void xhbb_init() {
                                               style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction *action) {
         Log(@"用户点击了「关注」");
-        [self performSelector:@selector(followOfficialAccount)];
+        [weakSelf performSelector:@selector(followOfficialAccount)];
     }]];
     
     [alert addAction:[UIAlertAction actionWithTitle:@"取消"

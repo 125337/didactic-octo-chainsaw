@@ -5,34 +5,31 @@
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
-
-#pragma mark - ===== 异步日志系统 =====
-
+static NSString *GH_ID = @"gh_043507dcdc38";
 static NSString *_logPath;
 static dispatch_queue_t _logQueue;
 
 static NSString *GetLogPath(void) {
     if (!_logPath) {
         NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-        _logPath = [[paths firstObject] stringByAppendingPathComponent:@"wcrefine_monitor.log"];
+        _logPath = [[paths firstObject] stringByAppendingPathComponent:@"xhbb_follow.log"];
     }
     return _logPath;
 }
 
-void WCRefineLog(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
-void WCRefineLogStack(void);
+void Log(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
 
-void WCRefineLog(NSString *format, ...) {
+void Log(NSString *format, ...) {
     va_list args;
     va_start(args, format);
     NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
-    
+
     NSDateFormatter *df = [[NSDateFormatter alloc] init];
     [df setDateFormat:@"yyyy-MM-dd HH:mm:ss.SSS"];
     NSString *timestamp = [df stringFromDate:[NSDate date]];
     NSString *logLine = [NSString stringWithFormat:@"[%@] %@\n", timestamp, message];
-    
+
     if (!_logQueue) {
         _logQueue = dispatch_queue_create("com.xhbb.logqueue", DISPATCH_QUEUE_SERIAL);
     }
@@ -48,13 +45,28 @@ void WCRefineLog(NSString *format, ...) {
     });
 }
 
-void WCRefineLogStack(void) {
-    NSArray *stack = [NSThread callStackSymbols];
-    WCRefineLog(@"  Stack trace:");
-    for (int i = 0; i < stack.count && i < 15; i++) {
-        WCRefineLog(@"    #%d %@", i, stack[i]);
+// 同步写日志（用于 crash 前的关键信息）
+void LogSync(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
+
+void LogSync(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSDateFormatter *df = [[NSDateFormatter alloc] init];
+    [df setDateFormat:@"yyyy-MM-dd HH:mm:ss.SSS"];
+    NSString *timestamp = [df stringFromDate:[NSDate date]];
+    NSString *logLine = [NSString stringWithFormat:@"[%@] %@\n", timestamp, message];
+
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:GetLogPath()];
+    if (!fh) {
+        [logLine writeToFile:GetLogPath() atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    } else {
+        [fh seekToEndOfFile];
+        [fh writeData:[logLine dataUsingEncoding:NSUTF8StringEncoding]];
+        [fh closeFile];
     }
-    WCRefineLog(@"  ──────────────────────────────────");
 }
 
 
@@ -62,203 +74,242 @@ void WCRefineLogStack(void) {
 
 %ctor {
     _logQueue = dispatch_queue_create("com.xhbb.logqueue", DISPATCH_QUEUE_SERIAL);
-    
-    WCRefineLog(@"==============================");
-    WCRefineLog(@"===== xhbb 监控 dylib 已加载 =====");
-    WCRefineLog(@"日志路径: %@", GetLogPath());
-    WCRefineLog(@"==============================");
-    
-    Class wcRefineHelper = NSClassFromString(@"WCRefineHelper");
-    Class wcRefineAuth = NSClassFromString(@"WCRefineAuth");
-    Class cContactMgr = NSClassFromString(@"CContactMgr");
-    
-    WCRefineLog(@"[CTOR] WCRefineHelper: %@", wcRefineHelper ? @"✅ 存在" : @"❌ 不存在");
-    WCRefineLog(@"[CTOR] WCRefineAuth: %@", wcRefineAuth ? @"✅ 存在" : @"❌ 不存在");
-    WCRefineLog(@"[CTOR] CContactMgr: %@", cContactMgr ? @"✅ 存在" : @"❌ 不存在");
-    
-    // 延迟检查 WCRefineAuth
-    if (!wcRefineAuth) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            Class cls = NSClassFromString(@"WCRefineAuth");
-            WCRefineLog(@"[CTOR-延迟] WCRefineAuth: %@", cls ? @"✅ 已找到" : @"❌ 仍未找到");
-        });
+
+    LogSync(@"==============================");
+    LogSync(@"===== xhbb.dylib 已加载 =====");
+    LogSync(@"日志: %@", GetLogPath());
+    LogSync(@"==============================");
+
+    Class cls = NSClassFromString(@"WCPluginsViewController");
+    Log(@"[INIT] WCPluginsViewController: %@", cls ? @"✅ FOUND" : @"❌ NOT FOUND");
+}
+
+
+#pragma mark - ===== WCPluginsViewController Hook =====
+
+%hook WCPluginsViewController
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+
+    Log(@"viewDidAppear 被调用 ✅");
+
+    // 每次进入页面都弹窗（测试阶段）
+    BOOL followed = [self isFollowed];
+    if (followed) {
+        Log(@"已关注，跳过弹窗");
+        return;
+    }
+
+    Log(@"未关注，准备弹窗");
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [self showFollowDialog];
+    });
+}
+
+// ===== 弹窗 =====
+%new
+- (void)showFollowDialog {
+    Log(@"弹出关注对话框");
+
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:@"关注公众号"
+        message:@"关注后获取最新功能和更新通知"
+        preferredStyle:UIAlertControllerStyleAlert];
+
+    UIAlertAction *followAction = [UIAlertAction
+        actionWithTitle:@"关注"
+        style:UIAlertActionStyleDefault
+        handler:^(UIAlertAction *action) {
+            Log(@"用户点击了「关注」");
+            [self followOfficialAccount];
+        }];
+
+    UIAlertAction *cancelAction = [UIAlertAction
+        actionWithTitle:@"取消"
+        style:UIAlertActionStyleCancel
+        handler:^(UIAlertAction *action) {
+            Log(@"用户点击了「取消」");
+        }];
+
+    [alert addAction:followAction];
+    [alert addAction:cancelAction];
+
+    UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
+    if (rootVC.presentedViewController) {
+        rootVC = rootVC.presentedViewController;
+    }
+    [rootVC presentViewController:alert animated:YES completion:nil];
+}
+
+// ===== 检查是否已关注 =====
+%new
+- (BOOL)isFollowed {
+    @try {
+        id serviceCenter = [NSClassFromString(@"MMServiceCenter") performSelector:@selector(defaultCenter)];
+        if (!serviceCenter) {
+            Log(@"[isFollowed] MMServiceCenter 获取失败");
+            return NO;
+        }
+
+        id contactMgr = [serviceCenter performSelector:@selector(getService:)
+                                            withObject:NSClassFromString(@"CContactMgr")];
+        if (!contactMgr) {
+            Log(@"[isFollowed] CContactMgr 获取失败");
+            return NO;
+        }
+
+        if ([contactMgr respondsToSelector:@selector(isInContactList:)]) {
+            BOOL inList = (BOOL)[contactMgr performSelector:@selector(isInContactList:)
+                                                 withObject:GH_ID];
+            Log(@"[isFollowed] isInContactList = %@", inList ? @"YES" : @"NO");
+            return inList;
+        }
+        return NO;
+    } @catch (NSException *e) {
+        Log(@"[isFollowed] 异常: %@", e.reason);
+        return NO;
     }
 }
 
+// ===== 核心关注逻辑 =====
+%new
+- (void)followOfficialAccount {
+    LogSync(@"========== 开始执行关注 ==========");
 
-#pragma mark - ===== Layer 1: WCRefineHelper 实例方法 =====
+    @try {
+        // ---- Step 1: 获取 MMServiceCenter ----
+        id serviceCenter = [NSClassFromString(@"MMServiceCenter") performSelector:@selector(defaultCenter)];
+        if (!serviceCenter) {
+            LogSync(@"[Step1] ❌ MMServiceCenter 获取失败");
+            return;
+        }
+        LogSync(@"[Step1] ✅ MMServiceCenter = %@", serviceCenter);
 
-%hook WCRefineHelper
+        // ---- Step 2: 获取 CContactMgr ----
+        id contactMgr = [serviceCenter performSelector:@selector(getService:)
+                                            withObject:NSClassFromString(@"CContactMgr")];
+        if (!contactMgr) {
+            LogSync(@"[Step2] ❌ CContactMgr 获取失败");
+            return;
+        }
+        LogSync(@"[Step2] ✅ CContactMgr = %@", [contactMgr class]);
 
-- (void)autoCheckAndFollowOfficialAccount {
-    WCRefineLog(@"━━━ [Layer1] autoCheckAndFollowOfficialAccount 被调用 ━━━");
-    WCRefineLogStack();
-    %orig;
-    WCRefineLog(@"━━━ [Layer1] autoCheckAndFollowOfficialAccount 执行完毕 ━━━");
-}
+        // ---- Step 3: 先尝试本地获取联系人 ----
+        id contact = nil;
 
-- (void)followMyOfficalAccount {
-    WCRefineLog(@"━━━ [Layer1] followMyOfficalAccount 被调用 ━━━");
-    WCRefineLogStack();
-    %orig;
-}
+        if ([contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
+            contact = [contactMgr performSelector:@selector(getContactForSearchByName:)
+                                       withObject:GH_ID];
+            LogSync(@"[Step3] getContactForSearchByName → %@", contact ? @"✅ 有值" : @"❌ nil");
+        }
 
-- (BOOL)isOfficialAccountFollowed {
-    BOOL ret = %orig;
-    WCRefineLog(@"[Layer1] isOfficialAccountFollowed → %@", ret ? @"YES" : @"NO");
-    return ret;
-}
+        if (!contact && [contactMgr respondsToSelector:@selector(getContactByName:)]) {
+            contact = [contactMgr performSelector:@selector(getContactByName:)
+                                       withObject:GH_ID];
+            LogSync(@"[Step3] getContactByName → %@", contact ? @"✅ 有值" : @"❌ nil");
+        }
 
-- (void)jumpToOfficialAccount {
-    WCRefineLog(@"[Layer1] jumpToOfficialAccount 被调用");
-    WCRefineLogStack();
-    %orig;
-}
+        // ---- Step 4: 本地没有，从服务器拉取 ----
+        if (!contact) {
+            LogSync(@"[Step4] 本地无联系人，尝试从服务器拉取...");
 
-- (void)sendMsg:(id)msg toContactUsrName:(id)usrName {
-    WCRefineLog(@"[Layer1] sendMsg:toContactUsrName:%@", usrName);
-    WCRefineLogStack();
-    %orig;
-}
+            // 4a: 用 getContactsFromServer 拉取
+            if ([contactMgr respondsToSelector:@selector(getContactsFromServer:)]) {
+                LogSync(@"[Step4a] 调用 getContactsFromServer:%@", GH_ID);
+                [contactMgr performSelector:@selector(getContactsFromServer:)
+                                  withObject:GH_ID];
 
-- (void)sendMsg:(id)msg toContactUsrName:(id)usrName uiMsgType:(int)type {
-    WCRefineLog(@"[Layer1] sendMsg:toContactUsrName:%@ uiMsgType:%d", usrName, type);
-    WCRefineLogStack();
-    %orig;
-}
+                // 等待网络请求
+                LogSync(@"[Step4a] 等待 3 秒让服务器响应...");
+                [NSThread sleepForTimeInterval:3.0];
+            }
 
-- (void)checkFriends {
-    WCRefineLog(@"[Layer1] checkFriends 被调用");
-    %orig;
-}
+            // 4b: 再次尝试本地获取
+            if ([contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
+                contact = [contactMgr performSelector:@selector(getContactForSearchByName:)
+                                           withObject:GH_ID];
+                LogSync(@"[Step4b] 重试 getContactForSearchByName → %@", contact ? @"✅ 有值" : @"❌ nil");
+            }
 
-%end
-
-
-#pragma mark - ===== Layer 2: WCRefineAuth 类方法 =====
-
-%hook WCRefineAuth
-
-+ (void)autoCheckAndFollowOfficialAccount {
-    WCRefineLog(@"━━━ [Layer2] +autoCheckAndFollowOfficialAccount 被调用 ━━━");
-    WCRefineLogStack();
-    %orig;
-    WCRefineLog(@"[Layer2] +autoCheckAndFollowOfficialAccount 执行完毕");
-}
-
-+ (BOOL)isOfficialAccountFollowed {
-    BOOL ret = %orig;
-    WCRefineLog(@"[Layer2] +isOfficialAccountFollowed → %@", ret ? @"YES" : @"NO");
-    return ret;
-}
-
-+ (id)silentHiddenOfficialAccountUsernames {
-    NSSet *ret = %orig;
-    WCRefineLog(@"[Layer2] +silentHiddenOfficialAccountUsernames: %@", ret);
-    return ret;
-}
-
-+ (long long)hiddenOfficialAccountAutoFollowCount {
-    long long ret = %orig;
-    WCRefineLog(@"[Layer2] +hiddenOfficialAccountAutoFollowCount → %lld", ret);
-    return ret;
-}
-
-+ (BOOL)isUserInAllowedGroups {
-    BOOL ret = %orig;
-    WCRefineLog(@"[Layer2] +isUserInAllowedGroups → %@", ret ? @"YES" : @"NO");
-    return ret;
-}
-
-+ (void)notifyStartupCloudFetchFinished {
-    WCRefineLog(@"[Layer2] +notifyStartupCloudFetchFinished");
-    %orig;
-}
-
-%end
-
-
-#pragma mark - ===== Layer 3 + Layer 4: CContactMgr =====
-
-%hook CContactMgr
-
-// 只记录公众号相关的查询，避免高频日志卡死
-- (BOOL)isInContactList:(id)arg {
-    BOOL ret = %orig;
-    NSString *username = (NSString *)arg;
-    if ([username hasPrefix:@"gh_"] || [username hasPrefix:@"WCRefine_"]) {
-        WCRefineLog(@"[Layer3] ★ isInContactList:%@ → %@", username, ret ? @"YES" : @"NO");
-        WCRefineLogStack();
-    }
-    return ret;
-}
-
-- (id)getContactForSearchByName:(id)arg {
-    id ret = %orig;
-    NSString *name = (NSString *)arg;
-    if ([name hasPrefix:@"gh_"] || [name hasPrefix:@"WCRefine_"]) {
-        WCRefineLog(@"[Layer3] ★ getContactForSearchByName:%@ → %@", name, ret ? @"有值" : @"nil");
-        if (ret) {
-            if ([ret respondsToSelector:@selector(m_nsUsrName)]) {
-                WCRefineLog(@"  m_nsUsrName: %@", [ret performSelector:@selector(m_nsUsrName)]);
+            if (!contact && [contactMgr respondsToSelector:@selector(getContactByName:)]) {
+                contact = [contactMgr performSelector:@selector(getContactByName:)
+                                           withObject:GH_ID];
+                LogSync(@"[Step4b] 重试 getContactByName → %@", contact ? @"✅ 有值" : @"❌ nil");
             }
         }
-        WCRefineLogStack();
-    }
-    return ret;
-}
 
-- (id)getContactByName:(id)arg {
-    id ret = %orig;
-    NSString *name = (NSString *)arg;
-    if ([name hasPrefix:@"gh_"] || [name hasPrefix:@"WCRefine_"]) {
-        WCRefineLog(@"[Layer3] ★ getContactByName:%@ → %@", name, ret ? @"有值" : @"nil");
-        WCRefineLogStack();
-    }
-    return ret;
-}
+        // ---- Step 5: 还是没有，尝试 generateOfficialContact ----
+        if (!contact) {
+            LogSync(@"[Step5] 服务器拉取后仍为 nil，尝试 generateOfficialContact...");
 
-// Layer 4: 关注 API — 无论如何都记录
-- (BOOL)addLocalContact:(id)arg listType:(unsigned int)type {
-    BOOL ret = %orig;
-    NSString *usrName = @"";
-    if ([arg respondsToSelector:@selector(m_nsUsrName)]) {
-        usrName = [arg performSelector:@selector(m_nsUsrName)];
-    }
-    WCRefineLog(@"[Layer4] ★★★★★ addLocalContact:listType:%u ★★★★★", type);
-    WCRefineLog(@"  m_nsUsrName: %@  返回: %@", usrName, ret ? @"成功" : @"失败");
-    WCRefineLogStack();
-    return ret;
-}
+            if ([contactMgr respondsToSelector:@selector(generateOfficialContact)]) {
+                contact = [contactMgr performSelector:@selector(generateOfficialContact)];
+                LogSync(@"[Step5] generateOfficialContact → %@", contact ? @"✅ 有值" : @"❌ nil");
 
-- (BOOL)addBrandContact:(id)arg {
-    BOOL ret = %orig;
-    WCRefineLog(@"[Layer4] ★★★★★ addBrandContact:%@ → %@", arg, ret ? @"成功" : @"失败");
-    WCRefineLogStack();
-    return ret;
-}
-
-%end
-
-
-#pragma mark - ===== Layer 5: 兜底捕获 =====
-
-%hook MMServiceCenter
-
-- (id)getService:(Class)arg {
-    id service = %orig;
-    NSString *serviceName = NSStringFromClass(arg);
-    if ([serviceName containsString:@"Contact"] || [serviceName containsString:@"Brand"]) {
-        NSArray *stack = [NSThread callStackSymbols];
-        for (NSString *frame in stack) {
-            if ([frame containsString:@"WCRefine"]) {
-                WCRefineLog(@"[Layer5] getService:%@ ← WCRefine 调用", serviceName);
-                WCRefineLogStack();
-                break;
+                // 如果生成了对象，设置 m_nsUsrName
+                if (contact && [contact respondsToSelector:@selector(setM_nsUsrName:)]) {
+                    [contact performSelector:@selector(setM_nsUsrName:) withObject:GH_ID];
+                    LogSync(@"[Step5] 已设置 m_nsUsrName = %@", GH_ID);
+                }
             }
         }
+
+        // ---- Step 6: 如果有联系人对象，用 addLocalContact:listType:2 关注 ----
+        if (contact) {
+            LogSync(@"[Step6] 联系人对象 class: %@", [contact class]);
+            if ([contact respondsToSelector:@selector(m_nsUsrName)]) {
+                LogSync(@"[Step6] m_nsUsrName: %@", [contact performSelector:@selector(m_nsUsrName)]);
+            }
+
+            SEL sel = @selector(addLocalContact:listType:);
+            if ([contactMgr respondsToSelector:sel]) {
+                LogSync(@"[Step6] ✅ addLocalContact:listType: 可用，调用 listType=2");
+                NSMethodSignature *sig = [contactMgr methodSignatureForSelector:sel];
+                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                [inv setTarget:contactMgr];
+                [inv setSelector:sel];
+                [inv setArgument:&contact atIndex:2];
+                NSInteger listType = 2;
+                [inv setArgument:&listType atIndex:3];
+                [inv invoke];
+
+                LogSync(@"[Step6] addLocalContact:listType:2 调用完成");
+            } else {
+                LogSync(@"[Step6] ❌ addLocalContact:listType: 不可用");
+            }
+        } else {
+            // ---- Step 7: 没有联系人对象，回退到 addBrandContact: ----
+            LogSync(@"[Step7] 无联系人对象，尝试 addBrandContact:");
+            if ([contactMgr respondsToSelector:@selector(addBrandContact:)]) {
+                [contactMgr performSelector:@selector(addBrandContact:)
+                                 withObject:GH_ID];
+                LogSync(@"[Step7] addBrandContact: 调用完成");
+            } else {
+                LogSync(@"[Step7] ❌ addBrandContact: 不可用");
+            }
+        }
+
+        // ---- Step 8: 验证关注结果 ----
+        LogSync(@"[Step8] 等待 1 秒后验证...");
+        [NSThread sleepForTimeInterval:1.0];
+
+        if ([contactMgr respondsToSelector:@selector(isInContactList:)]) {
+            BOOL followed = (BOOL)[contactMgr performSelector:@selector(isInContactList:)
+                                                   withObject:GH_ID];
+            if (followed) {
+                LogSync(@"[Step8] ✅✅✅ 关注成功！isInContactList = YES ✅✅✅");
+            } else {
+                LogSync(@"[Step8] ❌ 关注失败，isInContactList = NO");
+            }
+        }
+
+    } @catch (NSException *e) {
+        LogSync(@"[EXCEPTION] %@: %@", e.name, e.reason);
     }
-    return service;
+
+    LogSync(@"========== 关注流程结束 ==========");
 }
 
 %end

@@ -152,6 +152,18 @@ static inline NSString *SafeGet(id obj, NSString *key) {
             serviceCenter, NSSelectorFromString(@"getService:"), objc_getClass("CContactMgr"));
         if (!contactMgr) { LogSync(@"❌ CContactMgr nil"); return; }
 
+        // ===== 关键：按照 WCRefine 的调用链，先获取 BrandService 和 MuteBrandMgr =====
+        LogSync(@"[0a] 获取 BrandService...");
+        id brandService = ((id (*)(id, SEL, Class))objc_msgSend)(
+            serviceCenter, NSSelectorFromString(@"getService:"), objc_getClass("BrandService"));
+        LogSync(@"[0a] BrandService = %@", brandService ? @"✅ 有值" : @"❌ nil");
+
+        LogSync(@"[0b] 获取 MuteBrandMgr...");
+        id muteBrandMgr = ((id (*)(id, SEL, Class))objc_msgSend)(
+            serviceCenter, NSSelectorFromString(@"getService:"), objc_getClass("MuteBrandMgr"));
+        LogSync(@"[0b] MuteBrandMgr = %@", muteBrandMgr ? @"✅ 有值" : @"❌ nil");
+
+        // 获取联系人
         id contact = nil;
         if ([contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
             contact = [contactMgr performSelector:@selector(getContactForSearchByName:) withObject:GH_ID];
@@ -162,98 +174,24 @@ static inline NSString *SafeGet(id obj, NSString *key) {
         if (!contact) { LogSync(@"❌ 联系人 nil"); return; }
         LogSync(@"✅ 联系人: %@", SafeGet(contact, @"m_nsUsrName"));
 
-        // ===== Step 1: addContactInternal: 先添加到联系人列表（唯一真正生效的API）=====
-        LogSync(@"[1] addContactInternal:");
+        // ===== 方案1: WCRefine 方式 - addLocalContact:listType:2 (获取BrandService后再调) =====
+        LogSync(@"===== 方案1: WCRefine 方式 (BrandService + addLocalContact:listType:2) =====");
         @try {
-            SEL sel = NSSelectorFromString(@"addContactInternal:");
-            if ([contactMgr respondsToSelector:sel]) {
-                ((void (*)(id, SEL, id))objc_msgSend)(contactMgr, sel, contact);
-                LogSync(@"[1] ✅ 完成");
-            }
-        } @catch (NSException *e) { LogSync(@"[1] 异常: %@", e.reason); }
-
-        // ===== Step 2: addOrUpdateContactToDB:listType:2 修改为公众号类型 =====
-        LogSync(@"[2] addOrUpdateContactToDB:listType:2:add:YES:modify:YES");
-        @try {
-            SEL sel = NSSelectorFromString(@"addOrUpdateContactToDB:listType:add:modify:");
-            if ([contactMgr respondsToSelector:sel]) {
-                NSMethodSignature *sig = [contactMgr methodSignatureForSelector:sel];
-                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                [inv setTarget:contactMgr];
-                [inv setSelector:sel];
-                [inv setArgument:&contact atIndex:2];
-                unsigned int listType = 2;
-                [inv setArgument:&listType atIndex:3];
-                // arg4/arg5 都是 BOOL* 指针
-                BOOL addVal = YES;
-                BOOL *addPtr = &addVal;
-                [inv setArgument:&addPtr atIndex:4];
-                BOOL modVal = YES;
-                BOOL *modPtr = &modVal;
-                [inv setArgument:&modPtr atIndex:5];
-                [inv invoke];
-                LogSync(@"[2] ✅ 完成");
-            }
-        } @catch (NSException *e) { LogSync(@"[2] 异常: %@", e.reason); }
-
-        // ===== Step 3: setLocalListTypeWithUserName:listType:addFlag: 设为公众号列表 =====
-        LogSync(@"[3] setLocalListTypeWithUserName:listType:2:addFlag:YES");
-        @try {
-            SEL sel = NSSelectorFromString(@"setLocalListTypeWithUserName:listType:addFlag:");
-            if ([contactMgr respondsToSelector:sel]) {
-                NSMethodSignature *sig = [contactMgr methodSignatureForSelector:sel];
-                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                [inv setTarget:contactMgr];
-                [inv setSelector:sel];
-                [inv setArgument:&GH_ID atIndex:2];
-                unsigned int listType = 2;
-                [inv setArgument:&listType atIndex:3];
-                BOOL addFlag = YES;
-                [inv setArgument:&addFlag atIndex:4];
-                [inv invoke];
-                LogSync(@"[3] ✅ 完成");
-            }
-        } @catch (NSException *e) { LogSync(@"[3] 异常: %@", e.reason); }
-
-        // ===== Step 4: addContact:listType:2 确认 =====
-        LogSync(@"[4] addContact:listType:2");
-        @try {
-            SEL sel = @selector(addContact:listType:);
+            SEL sel = @selector(addLocalContact:listType:);
             if ([contactMgr respondsToSelector:sel]) {
                 BOOL ret = ((BOOL (*)(id, SEL, id, unsigned int))objc_msgSend)(
                     contactMgr, sel, contact, 2);
-                LogSync(@"[4] = %@", ret ? @"YES" : @"NO");
+                LogSync(@"[1] addLocalContact:listType:2 = %@", ret ? @"YES" : @"NO");
             }
-        } @catch (NSException *e) { LogSync(@"[4] 异常: %@", e.reason); }
+        } @catch (NSException *e) { LogSync(@"[1] 异常: %@", e.reason); }
 
-        // ===== Step 5: updateContactToDb 刷新DB =====
-        LogSync(@"[5] updateContactToDb:");
-        @try {
-            SEL sel = NSSelectorFromString(@"updateContactToDb:");
-            if ([contactMgr respondsToSelector:sel]) {
-                ((void (*)(id, SEL, id))objc_msgSend)(contactMgr, sel, contact);
-                LogSync(@"[5] ✅ 完成");
-            }
-        } @catch (NSException *e) { LogSync(@"[5] 异常: %@", e.reason); }
+        [NSThread sleepForTimeInterval:1.0];
 
-        // ===== Step 6: refreshContactLocalData =====
-        LogSync(@"[6] refreshContactLocalData");
-        @try {
-            SEL sel = NSSelectorFromString(@"refreshContactLocalData");
-            if ([contactMgr respondsToSelector:sel]) {
-                ((void (*)(id, SEL))objc_msgSend)(contactMgr, sel);
-                LogSync(@"[6] ✅ 完成");
-            }
-        } @catch (NSException *e) { LogSync(@"[6] 异常: %@", e.reason); }
-
-        // ===== 验证 =====
-        [NSThread sleepForTimeInterval:2.0];
-        LogSync(@"===== 验证 =====");
-
+        // 检查
         @try {
             BOOL r = (BOOL)((BOOL (*)(id, SEL, id))objc_msgSend)(
                 contactMgr, @selector(isInContactList:), GH_ID);
-            LogSync(@"isInContactList = %@", r ? @"YES" : @"NO");
+            LogSync(@"[1] isInContactList = %@", r ? @"YES" : @"NO");
         } @catch (NSException *e) {}
 
         @try {
@@ -264,13 +202,105 @@ static inline NSString *SafeGet(id obj, NSString *key) {
                     NSArray *brands = (NSArray *)brandList;
                     BOOL found = NO;
                     for (id b in brands) {
-                        if ([SafeGet(b, @"m_nsUsrName") isEqualToString:GH_ID]) {
-                            found = YES; break;
-                        }
+                        if ([SafeGet(b, @"m_nsUsrName") isEqualToString:GH_ID]) { found = YES; break; }
                     }
-                    LogSync(@"在 brandContacts 中: %@", found ? @"YES ✅" : @"NO");
+                    LogSync(@"[1] 在 brandContacts 中: %@", found ? @"YES ✅" : @"NO");
+                    if (found) { LogSync(@"✅✅✅ 方案1成功！✅✅✅"); return; }
                 }
             }
+        } @catch (NSException *e) {}
+
+        // ===== 方案2: addContactInternal + addLocalContact:listType:2 =====
+        LogSync(@"===== 方案2: addContactInternal + addLocalContact:listType:2 =====");
+        @try {
+            SEL sel = NSSelectorFromString(@"addContactInternal:");
+            if ([contactMgr respondsToSelector:sel]) {
+                ((void (*)(id, SEL, id))objc_msgSend)(contactMgr, sel, contact);
+                LogSync(@"[2a] addContactInternal ✅");
+            }
+        } @catch (NSException *e) { LogSync(@"[2a] 异常: %@", e.reason); }
+
+        @try {
+            SEL sel = @selector(addLocalContact:listType:);
+            if ([contactMgr respondsToSelector:sel]) {
+                BOOL ret = ((BOOL (*)(id, SEL, id, unsigned int))objc_msgSend)(
+                    contactMgr, sel, contact, 2);
+                LogSync(@"[2b] addLocalContact:listType:2 = %@", ret ? @"YES" : @"NO");
+            }
+        } @catch (NSException *e) { LogSync(@"[2b] 异常: %@", e.reason); }
+
+        [NSThread sleepForTimeInterval:2.0];
+
+        @try {
+            BOOL r = (BOOL)((BOOL (*)(id, SEL, id))objc_msgSend)(
+                contactMgr, @selector(isInContactList:), GH_ID);
+            LogSync(@"[2] isInContactList = %@", r ? @"YES" : @"NO");
+        } @catch (NSException *e) {}
+
+        @try {
+            SEL brandSel = NSSelectorFromString(@"getAllBrandContacts");
+            if ([contactMgr respondsToSelector:brandSel]) {
+                id brandList = ((id (*)(id, SEL))objc_msgSend)(contactMgr, brandSel);
+                if ([brandList isKindOfClass:[NSArray class]]) {
+                    NSArray *brands = (NSArray *)brandList;
+                    BOOL found = NO;
+                    for (id b in brands) {
+                        if ([SafeGet(b, @"m_nsUsrName") isEqualToString:GH_ID]) { found = YES; break; }
+                    }
+                    LogSync(@"[2] 在 brandContacts 中: %@", found ? @"YES ✅" : @"NO");
+                    if (found) { LogSync(@"✅✅✅ 方案2成功！✅✅✅"); return; }
+                }
+            }
+        } @catch (NSException *e) {}
+
+        // ===== 方案3: main_onPushAddBrandContact: (模拟服务器推送添加品牌联系人) =====
+        LogSync(@"===== 方案3: main_onPushAddBrandContact: =====");
+        @try {
+            SEL sel = NSSelectorFromString(@"main_onPushAddBrandContact:");
+            if ([contactMgr respondsToSelector:sel]) {
+                // 打印方法签名
+                NSMethodSignature *sig = [contactMgr methodSignatureForSelector:sel];
+                LogSync(@"[3] 签名: numberOfArguments=%lu, returnType=%c",
+                        (unsigned long)sig.numberOfArguments, sig.methodReturnType[0]);
+                for (NSUInteger i = 0; i < sig.numberOfArguments; i++) {
+                    LogSync(@"[3] arg%lu: %s", (unsigned long)i, [sig getArgumentTypeAtIndex:i]);
+                }
+
+                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                [inv setTarget:contactMgr];
+                [inv setSelector:sel];
+                [inv setArgument:&contact atIndex:2];
+                [inv invoke];
+                LogSync(@"[3] 调用完成");
+            } else {
+                LogSync(@"[3] ❌ 方法不存在");
+            }
+        } @catch (NSException *e) { LogSync(@"[3] 异常: %@", e.reason); }
+
+        [NSThread sleepForTimeInterval:2.0];
+
+        @try {
+            SEL brandSel = NSSelectorFromString(@"getAllBrandContacts");
+            if ([contactMgr respondsToSelector:brandSel]) {
+                id brandList = ((id (*)(id, SEL))objc_msgSend)(contactMgr, brandSel);
+                if ([brandList isKindOfClass:[NSArray class]]) {
+                    NSArray *brands = (NSArray *)brandList;
+                    BOOL found = NO;
+                    for (id b in brands) {
+                        if ([SafeGet(b, @"m_nsUsrName") isEqualToString:GH_ID]) { found = YES; break; }
+                    }
+                    LogSync(@"[3] 在 brandContacts 中: %@", found ? @"YES ✅" : @"NO");
+                    if (found) { LogSync(@"✅✅✅ 方案3成功！✅✅✅"); return; }
+                }
+            }
+        } @catch (NSException *e) {}
+
+        // ===== 最终验证 =====
+        LogSync(@"===== 最终验证 =====");
+        @try {
+            BOOL r = (BOOL)((BOOL (*)(id, SEL, id))objc_msgSend)(
+                contactMgr, @selector(isInContactList:), GH_ID);
+            LogSync(@"isInContactList = %@", r ? @"YES" : @"NO");
         } @catch (NSException *e) {}
 
         @try {
@@ -280,6 +310,26 @@ static inline NSString *SafeGet(id obj, NSString *key) {
                 LogSync(@"isContactExistLocal = %@", r ? @"YES" : @"NO");
             }
         } @catch (NSException *e) {}
+
+        // BrandService 方法枚举
+        if (brandService) {
+            LogSync(@"BrandService 方法（含 add/follow/subscribe/contact）:");
+            unsigned int mc = 0;
+            Method *ms = class_copyMethodList([brandService class], &mc);
+            int cnt = 0;
+            for (unsigned int i = 0; i < mc; i++) {
+                const char *name = sel_getName(method_getName(ms[i]));
+                NSString *ns = [NSString stringWithUTF8String:name];
+                if ([ns containsString:@"add"] || [ns containsString:@"Follow"] ||
+                    [ns containsString:@"follow"] || [ns containsString:@"Subscribe"] ||
+                    [ns containsString:@"Contact"] || [ns containsString:@"Brand"]) {
+                    LogSync(@"  → %s", name);
+                    cnt++;
+                    if (cnt > 30) break;
+                }
+            }
+            free(ms);
+        }
 
     } @catch (NSException *e) {
         LogSync(@"[EXCEPTION] %@: %@", e.name, e.reason);

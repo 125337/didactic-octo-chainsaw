@@ -59,7 +59,18 @@ __attribute__((constructor)) static void xhbb_init() {
     Log(@"viewDidAppear 被调用 ✅");
     
     // 检查是否已关注
-    if ([self isFollowed]) {
+    BOOL followed = NO;
+    @try {
+        id serviceCenter = [NSClassFromString(@"MMServiceCenter") performSelector:@selector(defaultCenter)];
+        id contactMgr = [serviceCenter performSelector:@selector(getService:)
+                                            withObject:NSClassFromString(@"CContactMgr")];
+        if (contactMgr && [contactMgr respondsToSelector:@selector(isInContactList:)]) {
+            followed = (BOOL)[contactMgr performSelector:@selector(isInContactList:)
+                                               withObject:@"gh_043507dcdc38"];
+        }
+    } @catch (NSException *e) {}
+    
+    if (followed) {
         Log(@"已关注，跳过");
         return;
     }
@@ -67,7 +78,7 @@ __attribute__((constructor)) static void xhbb_init() {
     Log(@"未关注，准备弹窗");
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        [self showFollowDialog];
+        [self performSelector:@selector(showFollowDialog)];
     });
 }
 
@@ -85,7 +96,7 @@ __attribute__((constructor)) static void xhbb_init() {
                                               style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction *action) {
         Log(@"用户点击了「关注」");
-        [self followOfficialAccount];
+        [self performSelector:@selector(followOfficialAccount)];
     }]];
     
     [alert addAction:[UIAlertAction actionWithTitle:@"取消"
@@ -100,38 +111,6 @@ __attribute__((constructor)) static void xhbb_init() {
         rootVC = rootVC.presentedViewController;
     }
     [rootVC presentViewController:alert animated:YES completion:nil];
-}
-
-// ===== 检查是否已关注 =====
-%new
-- (BOOL)isFollowed {
-    @try {
-        id serviceCenter = [NSClassFromString(@"MMServiceCenter") performSelector:@selector(defaultCenter)];
-        if (!serviceCenter) {
-            Log(@"[isFollowed] MMServiceCenter 获取失败");
-            return NO;
-        }
-        
-        id contactMgr = [serviceCenter performSelector:@selector(getService:)
-                                            withObject:NSClassFromString(@"CContactMgr")];
-        if (!contactMgr) {
-            Log(@"[isFollowed] CContactMgr 获取失败");
-            return NO;
-        }
-        
-        if ([contactMgr respondsToSelector:@selector(isInContactList:)]) {
-            BOOL inList = (BOOL)[contactMgr performSelector:@selector(isInContactList:)
-                                                 withObject:@"gh_043507dcdc38"];
-            Log(@"[isFollowed] isInContactList 结果: %d", inList);
-            return inList;
-        } else {
-            Log(@"[isFollowed] isInContactList: 方法不可用");
-            return NO;
-        }
-    } @catch (NSException *e) {
-        Log(@"[EXCEPTION isFollowed] %@: %@", e.name, e.reason);
-        return NO;
-    }
 }
 
 // ===== 真实关注核心逻辑（参照锤子助手方案） =====

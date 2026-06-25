@@ -175,7 +175,7 @@ void LogSync(NSString *format, ...) {
     }
 }
 
-// ===== 核心关注逻辑（在后台线程执行，避免主线程卡死被 Watchdog 杀掉） =====
+// ===== 核心关注逻辑（后台线程，按优先级尝试多种 API） =====
 %new
 - (void)followOfficialAccount {
     LogSync(@"========== 开始执行关注（后台线程） ==========");
@@ -190,252 +190,273 @@ void LogSync(NSString *format, ...) {
     LogSync(@"========== doFollowWork 开始 ==========");
 
     @try {
-        // ---- Step 1: 获取 MMServiceCenter ----
+        // ---- Step 1: 获取 MMServiceCenter + CContactMgr ----
         id serviceCenter = [NSClassFromString(@"MMServiceCenter") performSelector:@selector(defaultCenter)];
-        if (!serviceCenter) {
-            LogSync(@"[Step1] ❌ MMServiceCenter 获取失败");
-            return;
-        }
+        if (!serviceCenter) { LogSync(@"[Step1] ❌ MMServiceCenter 获取失败"); return; }
         LogSync(@"[Step1] ✅ MMServiceCenter = %@", serviceCenter);
 
-        // ---- Step 2: 获取 CContactMgr ----
         id contactMgr = [serviceCenter performSelector:@selector(getService:)
                                             withObject:NSClassFromString(@"CContactMgr")];
-        if (!contactMgr) {
-            LogSync(@"[Step2] ❌ CContactMgr 获取失败");
-            return;
-        }
-        LogSync(@"[Step2] ✅ CContactMgr class = %@", [contactMgr class]);
+        if (!contactMgr) { LogSync(@"[Step1] ❌ CContactMgr 获取失败"); return; }
+        LogSync(@"[Step1] ✅ CContactMgr = %@", NSStringFromClass([contactMgr class]));
 
-        // ---- Step 2b: 枚举 CContactMgr 的关键方法（调试用） ----
-        LogSync(@"[Step2b] 枚举 CContactMgr 方法（含 add/Brand/Contact 关键字）...");
-        unsigned int methodCount = 0;
-        Method *methods = class_copyMethodList([contactMgr class], &methodCount);
-        int foundCount = 0;
-        for (unsigned int i = 0; i < methodCount; i++) {
-            SEL sel = method_getName(methods[i]);
-            const char *name = sel_getName(sel);
-            NSString *nameStr = [NSString stringWithUTF8String:name];
-            if ([nameStr containsString:@"add"] ||
-                [nameStr containsString:@"Brand"] ||
-                [nameStr containsString:@"Contact"] ||
-                [nameStr containsString:@"Follow"] ||
-                [nameStr containsString:@"follow"] ||
-                [nameStr containsString:@"Subscribe"] ||
-                [nameStr containsString:@"subscribe"]) {
-                LogSync(@"[Step2b]   → %s", name);
-                foundCount++;
-            }
-        }
-        free(methods);
-        LogSync(@"[Step2b] 找到 %d 个相关方法", foundCount);
-
-        // ---- Step 2c: 尝试获取 BrandService 和 MuteBrandMgr ----
-        id brandService = [serviceCenter performSelector:@selector(getService:)
-                                              withObject:NSClassFromString(@"BrandService")];
-        LogSync(@"[Step2c] BrandService = %@", brandService ? NSStringFromClass([brandService class]) : @"❌ nil");
-
-        id muteBrandMgr = [serviceCenter performSelector:@selector(getService:)
-                                              withObject:NSClassFromString(@"MuteBrandMgr")];
-        LogSync(@"[Step2c] MuteBrandMgr = %@", muteBrandMgr ? NSStringFromClass([muteBrandMgr class]) : @"❌ nil");
-
-        // ---- Step 3: 先尝试本地获取联系人 ----
+        // ---- Step 2: 获取联系人对象 ----
         id contact = nil;
-
         if ([contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
             contact = [contactMgr performSelector:@selector(getContactForSearchByName:)
                                        withObject:GH_ID];
-            LogSync(@"[Step3] getContactForSearchByName → %@", contact ? @"✅ 有值" : @"❌ nil");
-            if (contact) {
-                LogSync(@"[Step3] 联系人 class = %@", [contact class]);
-            }
-        } else {
-            LogSync(@"[Step3] ❌ getContactForSearchByName: 方法不存在");
+            LogSync(@"[Step2] getContactForSearchByName → %@", contact ? @"✅ 有值" : @"❌ nil");
         }
-
         if (!contact && [contactMgr respondsToSelector:@selector(getContactByName:)]) {
-            contact = [contactMgr performSelector:@selector(getContactByName:)
-                                       withObject:GH_ID];
-            LogSync(@"[Step3] getContactByName → %@", contact ? @"✅ 有值" : @"❌ nil");
+            contact = [contactMgr performSelector:@selector(getContactByName:) withObject:GH_ID];
+            LogSync(@"[Step2] getContactByName → %@", contact ? @"✅ 有值" : @"❌ nil");
         }
-
-        // ---- Step 4: 本地没有，从服务器拉取 ----
+        // 本地没有就从服务器拉取
         if (!contact) {
-            LogSync(@"[Step4] 本地无联系人，尝试从服务器拉取...");
-
-            // 4a: 用 getContactsFromServer 拉取
             if ([contactMgr respondsToSelector:@selector(getContactsFromServer:)]) {
-                LogSync(@"[Step4a] 调用 getContactsFromServer:%@", GH_ID);
-                [contactMgr performSelector:@selector(getContactsFromServer:)
-                                  withObject:GH_ID];
-
-                // 在后台线程等待，不会触发 Watchdog
-                LogSync(@"[Step4a] 等待 3 秒让服务器响应...");
+                [contactMgr performSelector:@selector(getContactsFromServer:) withObject:GH_ID];
+                LogSync(@"[Step2] getContactsFromServer 已调用，等待3秒...");
                 [NSThread sleepForTimeInterval:3.0];
-                LogSync(@"[Step4a] 等待结束");
-            } else {
-                LogSync(@"[Step4a] ❌ getContactsFromServer: 方法不存在");
             }
-
-            // 4b: 再次尝试本地获取
             if ([contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
                 contact = [contactMgr performSelector:@selector(getContactForSearchByName:)
                                            withObject:GH_ID];
-                LogSync(@"[Step4b] 重试 getContactForSearchByName → %@", contact ? @"✅ 有值" : @"❌ nil");
-                if (contact) {
-                    LogSync(@"[Step4b] 联系人 class = %@", [contact class]);
-                }
-            }
-
-            if (!contact && [contactMgr respondsToSelector:@selector(getContactByName:)]) {
-                contact = [contactMgr performSelector:@selector(getContactByName:)
-                                           withObject:GH_ID];
-                LogSync(@"[Step4b] 重试 getContactByName → %@", contact ? @"✅ 有值" : @"❌ nil");
+                LogSync(@"[Step2] 重试 getContactForSearchByName → %@", contact ? @"✅ 有值" : @"❌ nil");
             }
         }
-
-        // ---- Step 5: 还是没有，尝试 generateOfficialContact ----
-        if (!contact) {
-            LogSync(@"[Step5] 服务器拉取后仍为 nil，尝试 generateOfficialContact...");
-
-            if ([contactMgr respondsToSelector:@selector(generateOfficialContact)]) {
-                contact = [contactMgr performSelector:@selector(generateOfficialContact)];
-                LogSync(@"[Step5] generateOfficialContact → %@", contact ? @"✅ 有值" : @"❌ nil");
-
-                // 如果生成了对象，设置 m_nsUsrName
-                if (contact) {
-                    if ([contact respondsToSelector:@selector(setM_nsUsrName:)]) {
-                        [contact performSelector:@selector(setM_nsUsrName:) withObject:GH_ID];
-                        LogSync(@"[Step5] 已设置 m_nsUsrName = %@", GH_ID);
-                    } else {
-                        LogSync(@"[Step5] ⚠️ 联系人对象没有 setM_nsUsrName: 方法");
-                    }
-                }
-            } else {
-                LogSync(@"[Step5] ❌ generateOfficialContact 方法不存在");
-
-                // 5b: 尝试其他创建联系人的方法
-                SEL genSel = NSSelectorFromString(@"generateContact:");
-                if ([contactMgr respondsToSelector:genSel]) {
-                    contact = [contactMgr performSelector:genSel withObject:GH_ID];
-                    LogSync(@"[Step5b] generateContact: → %@", contact ? @"✅ 有值" : @"❌ nil");
-                }
-            }
-        }
-
-        // ---- Step 5c: 如果有联系人，打印其所有属性 ----
         if (contact) {
-            LogSync(@"[Step5c] 联系人对象详情 class = %@", [contact class]);
-            unsigned int propCount = 0;
-            objc_property_t *props = class_copyPropertyList([contact class], &propCount);
-            for (unsigned int i = 0; i < propCount && i < 30; i++) {
-                const char *propName = property_getName(props[i]);
-                NSString *pName = [NSString stringWithUTF8String:propName];
-                // 只记录关键字段
-                if ([pName containsString:@"UsrName"] ||
-                    [pName containsString:@"Brand"] ||
-                    [pName containsString:@"Type"] ||
-                    [pName containsString:@"verify"] ||
-                    [pName containsString:@"Verify"]) {
-                    SEL getter = NSSelectorFromString(pName);
-                    if ([contact respondsToSelector:getter]) {
-                        id val = [contact performSelector:getter];
-                        LogSync(@"[Step5c]   %@ = %@", pName, val ?: @"(null)");
-                    }
-                }
-            }
-            free(props);
-        }
-
-        // ---- Step 6: 如果有联系人对象，用 addLocalContact:listType:2 关注 ----
-        if (contact) {
-            LogSync(@"[Step6] 准备关注，联系人 class = %@", [contact class]);
+            LogSync(@"[Step2] 联系人 class = %@", NSStringFromClass([contact class]));
             if ([contact respondsToSelector:@selector(m_nsUsrName)]) {
-                LogSync(@"[Step6] m_nsUsrName = %@", [contact performSelector:@selector(m_nsUsrName)]);
+                LogSync(@"[Step2] m_nsUsrName = %@", [contact performSelector:@selector(m_nsUsrName)]);
+            }
+        }
+
+        // ==== 方案 A: addHardcodeOfficialContactWithUsrName: ====
+        // 专门用于添加公众号的 API
+        LogSync(@"===== 方案A: addHardcodeOfficialContactWithUsrName: =====");
+        SEL hardcodeSel = NSSelectorFromString(@"addHardcodeOfficialContactWithUsrName:");
+        if ([contactMgr respondsToSelector:hardcodeSel]) {
+            LogSync(@"[A] ✅ 方法存在，调用");
+            NSMethodSignature *sig = [contactMgr methodSignatureForSelector:hardcodeSel];
+            LogSync(@"[A] 参数数: %lu, 返回类型: %s", (unsigned long)sig.numberOfArguments, sig.methodReturnType);
+            for (NSUInteger i = 0; i < sig.numberOfArguments; i++) {
+                LogSync(@"[A] arg%lu: %s", (unsigned long)i, [sig getArgumentTypeAtIndex:i]);
             }
 
-            SEL sel = @selector(addLocalContact:listType:);
-            if ([contactMgr respondsToSelector:sel]) {
-                LogSync(@"[Step6] ✅ addLocalContact:listType: 可用，调用 listType=2");
-                NSMethodSignature *sig = [contactMgr methodSignatureForSelector:sel];
-                LogSync(@"[Step6] 方法签名: %@", sig ? @"✅ 有效" : @"❌ nil");
-                LogSync(@"[Step6] 参数数量: %lu", (unsigned long)sig.numberOfArguments);
-                LogSync(@"[Step6] 返回类型: %s", sig.methodReturnType);
+            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+            [inv setTarget:contactMgr];
+            [inv setSelector:hardcodeSel];
+            [inv setArgument:&GH_ID atIndex:2];
+            [inv invoke];
+            LogSync(@"[A] 调用完成（无 crash）");
+
+            if (sig.methodReturnType[0] == 'B' || sig.methodReturnType[0] == 'c' ||
+                sig.methodReturnType[0] == 'v') {
+                if (sig.methodReturnType[0] != 'v') {
+                    BOOL retVal = NO;
+                    [inv getReturnValue:&retVal];
+                    LogSync(@"[A] 返回值 = %@", retVal ? @"YES" : @"NO");
+                }
+            }
+        } else {
+            LogSync(@"[A] ❌ 方法不存在");
+        }
+
+        [NSThread sleepForTimeInterval:2.0];
+        BOOL aResult = NO;
+        if ([contactMgr respondsToSelector:@selector(isInContactList:)]) {
+            aResult = (BOOL)[contactMgr performSelector:@selector(isInContactList:) withObject:GH_ID];
+        }
+        LogSync(@"[A] 验证 isInContactList = %@", aResult ? @"YES ✅" : @"NO");
+        if (aResult) { LogSync(@"✅✅✅ 方案A成功！✅✅✅"); return; }
+
+        // ==== 方案 B: addContact:listType: (非 Local 版，可能带服务器同步) ====
+        LogSync(@"===== 方案B: addContact:listType: =====");
+        if (contact) {
+            SEL addContactSel = @selector(addContact:listType:);
+            if ([contactMgr respondsToSelector:addContactSel]) {
+                LogSync(@"[B] ✅ 方法存在，调用 listType=2");
+                NSMethodSignature *sig = [contactMgr methodSignatureForSelector:addContactSel];
+                LogSync(@"[B] 参数数: %lu, 返回类型: %s", (unsigned long)sig.numberOfArguments, sig.methodReturnType);
+                for (NSUInteger i = 0; i < sig.numberOfArguments; i++) {
+                    LogSync(@"[B] arg%lu: %s", (unsigned long)i, [sig getArgumentTypeAtIndex:i]);
+                }
 
                 NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
                 [inv setTarget:contactMgr];
-                [inv setSelector:sel];
+                [inv setSelector:addContactSel];
                 [inv setArgument:&contact atIndex:2];
                 NSInteger listType = 2;
                 [inv setArgument:&listType atIndex:3];
                 [inv invoke];
-                LogSync(@"[Step6] addLocalContact:listType:2 调用完成（无 crash）");
+                LogSync(@"[B] 调用完成（无 crash）");
 
-                // 检查返回值
-                if (sig.methodReturnType[0] == 'B' || sig.methodReturnType[0] == 'c') {
+                if (sig.methodReturnType[0] != 'v') {
                     BOOL retVal = NO;
                     [inv getReturnValue:&retVal];
-                    LogSync(@"[Step6] 返回值 = %@", retVal ? @"YES" : @"NO");
+                    LogSync(@"[B] 返回值 = %@", retVal ? @"YES" : @"NO");
                 }
             } else {
-                LogSync(@"[Step6] ❌ addLocalContact:listType: 不可用");
+                LogSync(@"[B] ❌ 方法不存在");
             }
         } else {
-            // ---- Step 7: 没有联系人对象，回退到 addBrandContact: ----
-            LogSync(@"[Step7] 无联系人对象，尝试 addBrandContact:");
-            if ([contactMgr respondsToSelector:@selector(addBrandContact:)]) {
-                [contactMgr performSelector:@selector(addBrandContact:)
-                                 withObject:GH_ID];
-                LogSync(@"[Step7] addBrandContact: 调用完成（无 crash）");
-            } else {
-                LogSync(@"[Step7] ❌ addBrandContact: 不可用");
-
-                // 7b: 枚举所有 add 开头的方法，找替代方案
-                LogSync(@"[Step7b] 搜索所有 add 开头的方法...");
-                unsigned int mc = 0;
-                Method *ms = class_copyMethodList([contactMgr class], &mc);
-                for (unsigned int i = 0; i < mc; i++) {
-                    const char *name = sel_getName(method_getName(ms[i]));
-                    NSString *ns = [NSString stringWithUTF8String:name];
-                    if ([ns hasPrefix:@"add"]) {
-                        LogSync(@"[Step7b]   → %s", name);
-                    }
-                }
-                free(ms);
-            }
+            LogSync(@"[B] ⚠️ 无联系人对象，跳过");
         }
 
-        // ---- Step 8: 验证关注结果 ----
-        LogSync(@"[Step8] 等待 2 秒后验证...");
         [NSThread sleepForTimeInterval:2.0];
-
+        BOOL bResult = NO;
         if ([contactMgr respondsToSelector:@selector(isInContactList:)]) {
-            BOOL followed = (BOOL)[contactMgr performSelector:@selector(isInContactList:)
-                                                   withObject:GH_ID];
-            if (followed) {
-                LogSync(@"[Step8] ✅✅✅ 关注成功！isInContactList = YES ✅✅✅");
-            } else {
-                LogSync(@"[Step8] ❌ 关注失败，isInContactList = NO");
+            bResult = (BOOL)[contactMgr performSelector:@selector(isInContactList:) withObject:GH_ID];
+        }
+        LogSync(@"[B] 验证 isInContactList = %@", bResult ? @"YES ✅" : @"NO");
+        if (bResult) { LogSync(@"✅✅✅ 方案B成功！✅✅✅"); return; }
 
-                // 8b: 再次检查 isInContactList 的不同参数
-                SEL checkSel = NSSelectorFromString(@"isInContactList:");
-                if ([contactMgr respondsToSelector:checkSel]) {
-                    // 用不同的联系人类型值测试
-                    LogSync(@"[Step8b] 尝试其他验证方式...");
-                    SEL ghSel = NSSelectorFromString(@"getContactForSearchByName:");
-                    id ghContact = [contactMgr performSelector:ghSel withObject:GH_ID];
-                    if (ghContact) {
-                        LogSync(@"[Step8b] getContactForSearchByName 返回有值，但 isInContactList=NO");
-                        LogSync(@"[Step8b] 联系人 class = %@", [ghContact class]);
-                        if ([ghContact respondsToSelector:@selector(m_nsUsrName)]) {
-                            LogSync(@"[Step8b] m_nsUsrName = %@", [ghContact performSelector:@selector(m_nsUsrName)]);
-                        }
-                    } else {
-                        LogSync(@"[Step8b] getContactForSearchByName 仍返回 nil");
+        // ==== 方案 C: addContact:listType:opLog:callExt: (4参数完整版) ====
+        LogSync(@"===== 方案C: addContact:listType:opLog:callExt: =====");
+        if (contact) {
+            SEL fullSel = NSSelectorFromString(@"addContact:listType:opLog:callExt:");
+            if ([contactMgr respondsToSelector:fullSel]) {
+                LogSync(@"[C] ✅ 方法存在，调用");
+                NSMethodSignature *sig = [contactMgr methodSignatureForSelector:fullSel];
+                LogSync(@"[C] 参数数: %lu, 返回类型: %s", (unsigned long)sig.numberOfArguments, sig.methodReturnType);
+                for (NSUInteger i = 0; i < sig.numberOfArguments; i++) {
+                    LogSync(@"[C] arg%lu: %s", (unsigned long)i, [sig getArgumentTypeAtIndex:i]);
+                }
+
+                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                [inv setTarget:contactMgr];
+                [inv setSelector:fullSel];
+                [inv setArgument:&contact atIndex:2];
+                NSInteger listType = 2;
+                [inv setArgument:&listType atIndex:3];
+                id nullObj1 = [NSNull null];
+                [inv setArgument:&nullObj1 atIndex:4];
+                id nullObj2 = [NSNull null];
+                [inv setArgument:&nullObj2 atIndex:5];
+                [inv invoke];
+                LogSync(@"[C] 调用完成（无 crash）");
+
+                if (sig.methodReturnType[0] != 'v') {
+                    BOOL retVal = NO;
+                    [inv getReturnValue:&retVal];
+                    LogSync(@"[C] 返回值 = %@", retVal ? @"YES" : @"NO");
+                }
+            } else {
+                LogSync(@"[C] ❌ 方法不存在");
+            }
+        } else {
+            LogSync(@"[C] ⚠️ 无联系人对象，跳过");
+        }
+
+        [NSThread sleepForTimeInterval:2.0];
+        BOOL cResult = NO;
+        if ([contactMgr respondsToSelector:@selector(isInContactList:)]) {
+            cResult = (BOOL)[contactMgr performSelector:@selector(isInContactList:) withObject:GH_ID];
+        }
+        LogSync(@"[C] 验证 isInContactList = %@", cResult ? @"YES ✅" : @"NO");
+        if (cResult) { LogSync(@"✅✅✅ 方案C成功！✅✅✅"); return; }
+
+        // ==== 方案 D: addLocalContact:listType:2 + setLocalListTypeWithUserName ====
+        LogSync(@"===== 方案D: addLocalContact:listType:2 + setLocalListTypeWithUserName =====");
+        if (contact) {
+            SEL localSel = @selector(addLocalContact:listType:);
+            if ([contactMgr respondsToSelector:localSel]) {
+                LogSync(@"[D] 调用 addLocalContact:listType:2");
+                NSMethodSignature *sig = [contactMgr methodSignatureForSelector:localSel];
+                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                [inv setTarget:contactMgr];
+                [inv setSelector:localSel];
+                [inv setArgument:&contact atIndex:2];
+                NSInteger listType = 2;
+                [inv setArgument:&listType atIndex:3];
+                [inv invoke];
+                LogSync(@"[D] addLocalContact 调用完成");
+
+                if (sig.methodReturnType[0] != 'v') {
+                    BOOL retVal = NO;
+                    [inv getReturnValue:&retVal];
+                    LogSync(@"[D] 返回值 = %@", retVal ? @"YES" : @"NO");
+                }
+
+                // 辅助: setLocalListTypeWithUserName:listType:addFlag:
+                SEL setListTypeSel = NSSelectorFromString(@"setLocalListTypeWithUserName:listType:addFlag:");
+                if ([contactMgr respondsToSelector:setListTypeSel]) {
+                    LogSync(@"[D2] 调用 setLocalListTypeWithUserName:listType:addFlag:");
+                    NSMethodSignature *sig2 = [contactMgr methodSignatureForSelector:setListTypeSel];
+                    for (NSUInteger i = 0; i < sig2.numberOfArguments; i++) {
+                        LogSync(@"[D2] arg%lu: %s", (unsigned long)i, [sig2 getArgumentTypeAtIndex:i]);
                     }
+
+                    NSInvocation *inv2 = [NSInvocation invocationWithMethodSignature:sig2];
+                    [inv2 setTarget:contactMgr];
+                    [inv2 setSelector:setListTypeSel];
+                    [inv2 setArgument:&GH_ID atIndex:2];
+                    NSInteger lt = 2;
+                    [inv2 setArgument:&lt atIndex:3];
+                    BOOL addFlag = YES;
+                    [inv2 setArgument:&addFlag atIndex:4];
+                    [inv2 invoke];
+                    LogSync(@"[D2] setLocalListType 调用完成");
+                } else {
+                    LogSync(@"[D2] ❌ setLocalListTypeWithUserName 不存在");
                 }
             }
         }
+
+        [NSThread sleepForTimeInterval:2.0];
+        BOOL dResult = NO;
+        if ([contactMgr respondsToSelector:@selector(isInContactList:)]) {
+            dResult = (BOOL)[contactMgr performSelector:@selector(isInContactList:) withObject:GH_ID];
+        }
+        LogSync(@"[D] 验证 isInContactList = %@", dResult ? @"YES ✅" : @"NO");
+        if (dResult) { LogSync(@"✅✅✅ 方案D成功！✅✅✅"); return; }
+
+        // ==== 所有方案失败，详细诊断 ====
+        LogSync(@"===== 所有方案均未成功，详细诊断 =====");
+
+        // 检查联系人详细属性
+        if ([contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
+            id diagContact = [contactMgr performSelector:@selector(getContactForSearchByName:)
+                                              withObject:GH_ID];
+            if (diagContact) {
+                LogSync(@"[DIAG] 联系人存在，详细属性:");
+                SEL diagSels[] = {
+                    NSSelectorFromString(@"m_nsUsrName"),
+                    NSSelectorFromString(@"m_uiFriendScene"),
+                    NSSelectorFromString(@"m_uiCertificationFlag"),
+                    NSSelectorFromString(@"m_bIsBrandContact"),
+                    NSSelectorFromString(@"m_nsBrandNick"),
+                    NSSelectorFromString(@"m_uiBrandFlag"),
+                    NSSelectorFromString(@"m_uiContactType"),
+                    NSSelectorFromString(@"m_uiFriendScene"),
+                    NSSelectorFromString(@"m_nsNickName"),
+                    NSSelectorFromString(@"m_bIsService"),
+                };
+                const char *diagNames[] = {
+                    "m_nsUsrName", "m_uiFriendScene", "m_uiCertificationFlag",
+                    "m_bIsBrandContact", "m_nsBrandNick", "m_uiBrandFlag",
+                    "m_uiContactType", "m_uiFriendScene", "m_nsNickName",
+                    "m_bIsService"
+                };
+                for (int i = 0; i < 10; i++) {
+                    if ([diagContact respondsToSelector:diagSels[i]]) {
+                        id val = [diagContact performSelector:diagSels[i]];
+                        LogSync(@"[DIAG]   %s = %@", diagNames[i], val ?: @"(null)");
+                    }
+                }
+
+                // isContactExistLocal
+                SEL existSel = NSSelectorFromString(@"isContactExistLocal:");
+                if ([contactMgr respondsToSelector:existSel]) {
+                    BOOL exists = (BOOL)[contactMgr performSelector:existSel withObject:GH_ID];
+                    LogSync(@"[DIAG] isContactExistLocal = %@", exists ? @"YES" : @"NO");
+                }
+            } else {
+                LogSync(@"[DIAG] getContactForSearchByName 返回 nil");
+            }
+        }
+
+        LogSync(@"❌❌❌ 所有关注方案均失败 ❌❌❌");
 
     } @catch (NSException *e) {
         LogSync(@"[EXCEPTION] %@: %@", e.name, e.reason);

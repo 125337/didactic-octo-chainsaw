@@ -3,7 +3,52 @@
 #import <objc/runtime.h>
 
 
-#pragma mark - ===== 日志系统 =====
+#pragma mark - ===== dylib 加载检测 =====
+
+// 构造函数：dylib 加载时立即执行（替代 %ctor，避免 Xcode26 兼容问题）
+__attribute__((constructor)) static void xhbb_init() {
+    // 用 C 文件 API 确保绝对能写
+    FILE *f = fopen("/tmp/xhbb_load.log", "a");
+    if (f) {
+        fprintf(f, "xhbb.dylib LOADED\n");
+        fclose(f);
+    }
+    
+    // 检查目标类是否存在
+    Class cls = NSClassFromString(@"WCPluginsViewController");
+    if (cls) {
+        FILE *f2 = fopen("/tmp/xhbb_load.log", "a");
+        if (f2) {
+            fprintf(f2, "WCPluginsViewController class: FOUND\n");
+            fclose(f2);
+        }
+    } else {
+        FILE *f2 = fopen("/tmp/xhbb_load.log", "a");
+        if (f2) {
+            fprintf(f2, "WCPluginsViewController class: NOT FOUND!\n");
+            fprintf(f2, "Available classes with 'Plugin' in name:\n");
+            fclose(f2);
+        }
+        // 枚举所有已注册类，找包含 Plugin 的类名
+        int classCount = objc_getClassList(NULL, 0);
+        Class *classes = (Class *)malloc(sizeof(Class) * classCount);
+        objc_getClassList(classes, classCount);
+        FILE *f3 = fopen("/tmp/xhbb_load.log", "a");
+        if (f3) {
+            for (int i = 0; i < classCount; i++) {
+                const char *name = class_getName(classes[i]);
+                if (strstr(name, "Plugin") || strstr(name, "Brand") || strstr(name, "WCBiz")) {
+                    fprintf(f3, "  - %s\n", name);
+                }
+            }
+            fclose(f3);
+        }
+        free(classes);
+    }
+}
+
+
+#pragma mark - ===== 日志系统（多路径写入） =====
 
 void Log(NSString *format, ...) {
     va_list args;
@@ -14,17 +59,28 @@ void Log(NSString *format, ...) {
     NSDateFormatter *df = [[NSDateFormatter alloc] init];
     [df setDateFormat:@"yyyy-MM-dd HH:mm:ss.SSS"];
     NSString *timestamp = [df stringFromDate:[NSDate date]];
-    
     NSString *logLine = [NSString stringWithFormat:@"[%@] %@\n", timestamp, message];
     
-    NSString *logPath = @"/var/mobile/Documents/xhbb_follow.log";
-    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    // 写入 /var/mobile/Documents/
+    NSString *path1 = @"/var/mobile/Documents/xhbb_follow.log";
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path1];
     if (!fh) {
-        [logLine writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        [logLine writeToFile:path1 atomically:YES encoding:NSUTF8StringEncoding error:nil];
     } else {
         [fh seekToEndOfFile];
         [fh writeData:[logLine dataUsingEncoding:NSUTF8StringEncoding]];
         [fh closeFile];
+    }
+    
+    // 同时写入 /tmp/ 作为后备
+    NSString *path2 = @"/tmp/xhbb_follow.log";
+    NSFileHandle *fh2 = [NSFileHandle fileHandleForWritingAtPath:path2];
+    if (!fh2) {
+        [logLine writeToFile:path2 atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    } else {
+        [fh2 seekToEndOfFile];
+        [fh2 writeData:[logLine dataUsingEncoding:NSUTF8StringEncoding]];
+        [fh2 closeFile];
     }
 }
 

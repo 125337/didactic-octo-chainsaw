@@ -134,17 +134,9 @@ static inline NSString *SafeGet(id obj, NSString *key) {
 
 %new
 - (void)followOfficialAccount {
-    LogSync(@"========== 开始关注 ==========");
-    id s = self;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        [s performSelector:@selector(doFollowWork)];
-    });
-}
-
-%new
-- (void)doFollowWork {
+    LogSync(@"========== 开始打开公众号资料页 ==========");
     @try {
-        // 获取基础对象
+        // 1. 获取 CContactMgr
         id serviceCenter = ((id (*)(id, SEL))objc_msgSend)(
             objc_getClass("MMServiceCenter"), NSSelectorFromString(@"defaultCenter"));
         if (!serviceCenter) { LogSync(@"❌ MMServiceCenter nil"); return; }
@@ -153,70 +145,77 @@ static inline NSString *SafeGet(id obj, NSString *key) {
             serviceCenter, NSSelectorFromString(@"getService:"), objc_getClass("CContactMgr"));
         if (!contactMgr) { LogSync(@"❌ CContactMgr nil"); return; }
 
-        // 获取联系人
+        // 2. 获取联系人对象（参考锤子助手 addGzh 方法）
         id contact = nil;
-        if ([contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
-            contact = [contactMgr performSelector:@selector(getContactForSearchByName:) withObject:GH_ID];
+        SEL getContactSel = NSSelectorFromString(@"getContactByName:");
+        if ([contactMgr respondsToSelector:getContactSel]) {
+            contact = ((id (*)(id, SEL, id))objc_msgSend)(contactMgr, getContactSel, GH_ID);
+            Log(@"getContactByName: %@", contact ? @"有结果" : @"nil");
         }
-        if (!contact && [contactMgr respondsToSelector:@selector(getContactByName:)]) {
-            contact = [contactMgr performSelector:@selector(getContactByName:) withObject:GH_ID];
+        if (!contact) {
+            SEL searchSel = NSSelectorFromString(@"getContactForSearchByName:");
+            if ([contactMgr respondsToSelector:searchSel]) {
+                contact = ((id (*)(id, SEL, id))objc_msgSend)(contactMgr, searchSel, GH_ID);
+                Log(@"getContactForSearchByName: %@", contact ? @"有结果" : @"nil");
+            }
         }
-        if (!contact) { LogSync(@"❌ 联系人 nil"); return; }
+        if (!contact) {
+            SEL byUserSel = NSSelectorFromString(@"getContactByUserName:");
+            if ([contactMgr respondsToSelector:byUserSel]) {
+                contact = ((id (*)(id, SEL, id))objc_msgSend)(contactMgr, byUserSel, GH_ID);
+                Log(@"getContactByUserName: %@", contact ? @"有结果" : @"nil");
+            }
+        }
+        if (!contact) { LogSync(@"❌ 无法获取公众号联系人，可能未预加载"); return; }
         LogSync(@"✅ 联系人: %@", SafeGet(contact, @"m_nsUsrName"));
 
-        // Step 1: addContactInternal: 添加到联系人列表
-        @try {
-            SEL sel = NSSelectorFromString(@"addContactInternal:");
-            if ([contactMgr respondsToSelector:sel]) {
-                ((void (*)(id, SEL, id))objc_msgSend)(contactMgr, sel, contact);
-                LogSync(@"[1] addContactInternal ✅");
-            }
-        } @catch (NSException *e) { LogSync(@"[1] 异常: %@", e.reason); }
+        // 3. 创建 ContactInfoViewController（参考锤子助手 + MioPlugin 实现）
+        Class contactInfoVCClass = objc_getClass("ContactInfoViewController");
+        if (!contactInfoVCClass) { LogSync(@"❌ ContactInfoViewController 类不存在"); return; }
 
-        // Step 2: setLocalListTypeWithUserName:listType:addFlag: 设为公众号列表(listType=2)
-        @try {
-            SEL sel = NSSelectorFromString(@"setLocalListTypeWithUserName:listType:addFlag:");
-            if ([contactMgr respondsToSelector:sel]) {
-                NSMethodSignature *sig = [contactMgr methodSignatureForSelector:sel];
-                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                [inv setTarget:contactMgr];
-                [inv setSelector:sel];
-                [inv setArgument:&GH_ID atIndex:2];
-                unsigned int listType = 2;
-                [inv setArgument:&listType atIndex:3];
-                BOOL addFlag = YES;
-                [inv setArgument:&addFlag atIndex:4];
-                [inv invoke];
-                LogSync(@"[2] setLocalListType:2 ✅");
-            }
-        } @catch (NSException *e) { LogSync(@"[2] 异常: %@", e.reason); }
+        id contactInfoVC = [[contactInfoVCClass alloc] init];
+        if (!contactInfoVC) { LogSync(@"❌ 创建 ContactInfoViewController 失败"); return; }
 
-        // Step 3: addContact:listType:2 确认加入公众号列表
-        @try {
-            SEL sel = @selector(addContact:listType:);
-            if ([contactMgr respondsToSelector:sel]) {
-                BOOL ret = ((BOOL (*)(id, SEL, id, unsigned int))objc_msgSend)(
-                    contactMgr, sel, contact, 2);
-                LogSync(@"[3] addContact:listType:2 = %@", ret ? @"YES" : @"NO");
-            }
-        } @catch (NSException *e) { LogSync(@"[3] 异常: %@", e.reason); }
+        // 4. 设置联系人对象
+        SEL setContactSel = NSSelectorFromString(@"setM_contact:");
+        if ([contactInfoVC respondsToSelector:setContactSel]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(contactInfoVC, setContactSel, contact);
+            LogSync(@"✅ setM_contact: 成功");
+        } else {
+            LogSync(@"❌ ContactInfoViewController 不响应 setM_contact:");
+            return;
+        }
 
-        // 验证
-        [NSThread sleepForTimeInterval:2.0];
-        @try {
-            BOOL r = (BOOL)((BOOL (*)(id, SEL, id))objc_msgSend)(
-                contactMgr, @selector(isInContactList:), GH_ID);
-            if (r) {
-                LogSync(@"✅✅✅ 关注成功！✅✅✅");
+        // 5. Push 到导航控制器（必须在主线程）
+        dispatch_async(dispatch_get_main_queue(), ^{
+            id nav = ((id (*)(id, SEL))objc_msgSend)(self, NSSelectorFromString(@"navigationController"));
+            if (nav && [nav respondsToSelector:NSSelectorFromString(@"pushViewController:animated:")]) {
+                ((void (*)(id, SEL, id, BOOL))objc_msgSend)(
+                    nav, NSSelectorFromString(@"pushViewController:animated:"), contactInfoVC, YES);
+                LogSync(@"✅ 已打开公众号资料页，请手动点击关注按钮");
             } else {
-                LogSync(@"❌ 关注失败");
+                // 备用方案：从 keyWindow 获取导航控制器
+                UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
+                UIViewController *topVC = rootVC;
+                while (topVC.presentedViewController) {
+                    topVC = topVC.presentedViewController;
+                }
+                if ([topVC isKindOfClass:[UINavigationController class]]) {
+                    [(UINavigationController *)topVC pushViewController:contactInfoVC animated:YES];
+                    LogSync(@"✅ 已打开公众号资料页(备用方案)");
+                } else if (topVC.navigationController) {
+                    [topVC.navigationController pushViewController:contactInfoVC animated:YES];
+                    LogSync(@"✅ 已打开公众号资料页(备用方案2)");
+                } else {
+                    LogSync(@"❌ 无法获取导航控制器");
+                }
             }
-        } @catch (NSException *e) {}
+        });
 
     } @catch (NSException *e) {
         LogSync(@"[EXCEPTION] %@: %@", e.name, e.reason);
     }
-    LogSync(@"========== 关注流程结束 ==========");
+    LogSync(@"========== 打开资料页流程结束 ==========");
 }
 
 %end

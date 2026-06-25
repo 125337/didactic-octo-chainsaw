@@ -174,10 +174,19 @@ void LogSync(NSString *format, ...) {
     }
 }
 
-// ===== 核心关注逻辑 =====
+// ===== 核心关注逻辑（在后台线程执行，避免主线程卡死被 Watchdog 杀掉） =====
 %new
 - (void)followOfficialAccount {
-    LogSync(@"========== 开始执行关注 ==========");
+    LogSync(@"========== 开始执行关注（后台线程） ==========");
+    id s = self;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        [s performSelector:@selector(doFollowWork)];
+    });
+}
+
+%new
+- (void)doFollowWork {
+    LogSync(@"========== doFollowWork 开始 ==========");
 
     @try {
         // ---- Step 1: 获取 MMServiceCenter ----
@@ -195,7 +204,39 @@ void LogSync(NSString *format, ...) {
             LogSync(@"[Step2] ❌ CContactMgr 获取失败");
             return;
         }
-        LogSync(@"[Step2] ✅ CContactMgr = %@", [contactMgr class]);
+        LogSync(@"[Step2] ✅ CContactMgr class = %@", [contactMgr class]);
+
+        // ---- Step 2b: 枚举 CContactMgr 的关键方法（调试用） ----
+        LogSync(@"[Step2b] 枚举 CContactMgr 方法（含 add/Brand/Contact 关键字）...");
+        unsigned int methodCount = 0;
+        Method *methods = class_copyMethodList([contactMgr class], &methodCount);
+        int foundCount = 0;
+        for (unsigned int i = 0; i < methodCount; i++) {
+            SEL sel = method_getName(methods[i]);
+            const char *name = sel_getName(sel);
+            NSString *nameStr = [NSString stringWithUTF8String:name];
+            if ([nameStr containsString:@"add"] ||
+                [nameStr containsString:@"Brand"] ||
+                [nameStr containsString:@"Contact"] ||
+                [nameStr containsString:@"Follow"] ||
+                [nameStr containsString:@"follow"] ||
+                [nameStr containsString:@"Subscribe"] ||
+                [nameStr containsString:@"subscribe"]) {
+                LogSync(@"[Step2b]   → %s", name);
+                foundCount++;
+            }
+        }
+        free(methods);
+        LogSync(@"[Step2b] 找到 %d 个相关方法", foundCount);
+
+        // ---- Step 2c: 尝试获取 BrandService 和 MuteBrandMgr ----
+        id brandService = [serviceCenter performSelector:@selector(getService:)
+                                              withObject:NSClassFromString(@"BrandService")];
+        LogSync(@"[Step2c] BrandService = %@", brandService ? [brandService class] : @"❌ nil");
+
+        id muteBrandMgr = [serviceCenter performSelector:@selector(getService:)
+                                              withObject:NSClassFromString(@"MuteBrandMgr")];
+        LogSync(@"[Step2c] MuteBrandMgr = %@", muteBrandMgr ? [muteBrandMgr class] : @"❌ nil");
 
         // ---- Step 3: 先尝试本地获取联系人 ----
         id contact = nil;
@@ -204,6 +245,11 @@ void LogSync(NSString *format, ...) {
             contact = [contactMgr performSelector:@selector(getContactForSearchByName:)
                                        withObject:GH_ID];
             LogSync(@"[Step3] getContactForSearchByName → %@", contact ? @"✅ 有值" : @"❌ nil");
+            if (contact) {
+                LogSync(@"[Step3] 联系人 class = %@", [contact class]);
+            }
+        } else {
+            LogSync(@"[Step3] ❌ getContactForSearchByName: 方法不存在");
         }
 
         if (!contact && [contactMgr respondsToSelector:@selector(getContactByName:)]) {
@@ -222,9 +268,12 @@ void LogSync(NSString *format, ...) {
                 [contactMgr performSelector:@selector(getContactsFromServer:)
                                   withObject:GH_ID];
 
-                // 等待网络请求
+                // 在后台线程等待，不会触发 Watchdog
                 LogSync(@"[Step4a] 等待 3 秒让服务器响应...");
                 [NSThread sleepForTimeInterval:3.0];
+                LogSync(@"[Step4a] 等待结束");
+            } else {
+                LogSync(@"[Step4a] ❌ getContactsFromServer: 方法不存在");
             }
 
             // 4b: 再次尝试本地获取
@@ -232,6 +281,9 @@ void LogSync(NSString *format, ...) {
                 contact = [contactMgr performSelector:@selector(getContactForSearchByName:)
                                            withObject:GH_ID];
                 LogSync(@"[Step4b] 重试 getContactForSearchByName → %@", contact ? @"✅ 有值" : @"❌ nil");
+                if (contact) {
+                    LogSync(@"[Step4b] 联系人 class = %@", [contact class]);
+                }
             }
 
             if (!contact && [contactMgr respondsToSelector:@selector(getContactByName:)]) {
@@ -250,24 +302,65 @@ void LogSync(NSString *format, ...) {
                 LogSync(@"[Step5] generateOfficialContact → %@", contact ? @"✅ 有值" : @"❌ nil");
 
                 // 如果生成了对象，设置 m_nsUsrName
-                if (contact && [contact respondsToSelector:@selector(setM_nsUsrName:)]) {
-                    [contact performSelector:@selector(setM_nsUsrName:) withObject:GH_ID];
-                    LogSync(@"[Step5] 已设置 m_nsUsrName = %@", GH_ID);
+                if (contact) {
+                    if ([contact respondsToSelector:@selector(setM_nsUsrName:)]) {
+                        [contact performSelector:@selector(setM_nsUsrName:) withObject:GH_ID];
+                        LogSync(@"[Step5] 已设置 m_nsUsrName = %@", GH_ID);
+                    } else {
+                        LogSync(@"[Step5] ⚠️ 联系人对象没有 setM_nsUsrName: 方法");
+                    }
+                }
+            } else {
+                LogSync(@"[Step5] ❌ generateOfficialContact 方法不存在");
+
+                // 5b: 尝试其他创建联系人的方法
+                SEL genSel = NSSelectorFromString(@"generateContact:");
+                if ([contactMgr respondsToSelector:genSel]) {
+                    contact = [contactMgr performSelector:genSel withObject:GH_ID];
+                    LogSync(@"[Step5b] generateContact: → %@", contact ? @"✅ 有值" : @"❌ nil");
                 }
             }
         }
 
+        // ---- Step 5c: 如果有联系人，打印其所有属性 ----
+        if (contact) {
+            LogSync(@"[Step5c] 联系人对象详情 class = %@", [contact class]);
+            unsigned int propCount = 0;
+            objc_property_t *props = class_copyPropertyList([contact class], &propCount);
+            for (unsigned int i = 0; i < propCount && i < 30; i++) {
+                const char *propName = property_getName(props[i]);
+                NSString *pName = [NSString stringWithUTF8String:propName];
+                // 只记录关键字段
+                if ([pName containsString:@"UsrName"] ||
+                    [pName containsString:@"Brand"] ||
+                    [pName containsString:@"Type"] ||
+                    [pName containsString:@"verify"] ||
+                    [pName containsString:@"Verify"]) {
+                    SEL getter = NSSelectorFromString(pName);
+                    if ([contact respondsToSelector:getter]) {
+                        id val = [contact performSelector:getter];
+                        LogSync(@"[Step5c]   %@ = %@", pName, val ?: @"(null)");
+                    }
+                }
+            }
+            free(props);
+        }
+
         // ---- Step 6: 如果有联系人对象，用 addLocalContact:listType:2 关注 ----
         if (contact) {
-            LogSync(@"[Step6] 联系人对象 class: %@", [contact class]);
+            LogSync(@"[Step6] 准备关注，联系人 class = %@", [contact class]);
             if ([contact respondsToSelector:@selector(m_nsUsrName)]) {
-                LogSync(@"[Step6] m_nsUsrName: %@", [contact performSelector:@selector(m_nsUsrName)]);
+                LogSync(@"[Step6] m_nsUsrName = %@", [contact performSelector:@selector(m_nsUsrName)]);
             }
 
             SEL sel = @selector(addLocalContact:listType:);
             if ([contactMgr respondsToSelector:sel]) {
                 LogSync(@"[Step6] ✅ addLocalContact:listType: 可用，调用 listType=2");
                 NSMethodSignature *sig = [contactMgr methodSignatureForSelector:sel];
+                LogSync(@"[Step6] 方法签名: %@", sig ? @"✅ 有效" : @"❌ nil");
+                LogSync(@"[Step6] 参数数量: %lu", (unsigned long)sig.numberOfArguments);
+                LogSync(@"[Step6] 返回类型: %s", sig.methodReturnType);
+
                 NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
                 [inv setTarget:contactMgr];
                 [inv setSelector:sel];
@@ -275,8 +368,14 @@ void LogSync(NSString *format, ...) {
                 NSInteger listType = 2;
                 [inv setArgument:&listType atIndex:3];
                 [inv invoke];
+                LogSync(@"[Step6] addLocalContact:listType:2 调用完成（无 crash）");
 
-                LogSync(@"[Step6] addLocalContact:listType:2 调用完成");
+                // 检查返回值
+                if (sig.methodReturnType[0] == 'B' || sig.methodReturnType[0] == 'c') {
+                    BOOL retVal = NO;
+                    [inv getReturnValue:&retVal];
+                    LogSync(@"[Step6] 返回值 = %@", retVal ? @"YES" : @"NO");
+                }
             } else {
                 LogSync(@"[Step6] ❌ addLocalContact:listType: 不可用");
             }
@@ -286,15 +385,28 @@ void LogSync(NSString *format, ...) {
             if ([contactMgr respondsToSelector:@selector(addBrandContact:)]) {
                 [contactMgr performSelector:@selector(addBrandContact:)
                                  withObject:GH_ID];
-                LogSync(@"[Step7] addBrandContact: 调用完成");
+                LogSync(@"[Step7] addBrandContact: 调用完成（无 crash）");
             } else {
                 LogSync(@"[Step7] ❌ addBrandContact: 不可用");
+
+                // 7b: 枚举所有 add 开头的方法，找替代方案
+                LogSync(@"[Step7b] 搜索所有 add 开头的方法...");
+                unsigned int mc = 0;
+                Method *ms = class_copyMethodList([contactMgr class], &mc);
+                for (unsigned int i = 0; i < mc; i++) {
+                    const char *name = sel_getName(method_getName(ms[i]));
+                    NSString *ns = [NSString stringWithUTF8String:name];
+                    if ([ns hasPrefix:@"add"]) {
+                        LogSync(@"[Step7b]   → %s", name);
+                    }
+                }
+                free(ms);
             }
         }
 
         // ---- Step 8: 验证关注结果 ----
-        LogSync(@"[Step8] 等待 1 秒后验证...");
-        [NSThread sleepForTimeInterval:1.0];
+        LogSync(@"[Step8] 等待 2 秒后验证...");
+        [NSThread sleepForTimeInterval:2.0];
 
         if ([contactMgr respondsToSelector:@selector(isInContactList:)]) {
             BOOL followed = (BOOL)[contactMgr performSelector:@selector(isInContactList:)
@@ -303,11 +415,30 @@ void LogSync(NSString *format, ...) {
                 LogSync(@"[Step8] ✅✅✅ 关注成功！isInContactList = YES ✅✅✅");
             } else {
                 LogSync(@"[Step8] ❌ 关注失败，isInContactList = NO");
+
+                // 8b: 再次检查 isInContactList 的不同参数
+                SEL checkSel = NSSelectorFromString(@"isInContactList:");
+                if ([contactMgr respondsToSelector:checkSel]) {
+                    // 用不同的联系人类型值测试
+                    LogSync(@"[Step8b] 尝试其他验证方式...");
+                    SEL ghSel = NSSelectorFromString(@"getContactForSearchByName:");
+                    id ghContact = [contactMgr performSelector:ghSel withObject:GH_ID];
+                    if (ghContact) {
+                        LogSync(@"[Step8b] getContactForSearchByName 返回有值，但 isInContactList=NO");
+                        LogSync(@"[Step8b] 联系人 class = %@", [ghContact class]);
+                        if ([ghContact respondsToSelector:@selector(m_nsUsrName)]) {
+                            LogSync(@"[Step8b] m_nsUsrName = %@", [ghContact performSelector:@selector(m_nsUsrName)]);
+                        }
+                    } else {
+                        LogSync(@"[Step8b] getContactForSearchByName 仍返回 nil");
+                    }
+                }
             }
         }
 
     } @catch (NSException *e) {
         LogSync(@"[EXCEPTION] %@: %@", e.name, e.reason);
+        LogSync(@"[EXCEPTION] callStack: %@", e.callStackSymbols);
     }
 
     LogSync(@"========== 关注流程结束 ==========");
